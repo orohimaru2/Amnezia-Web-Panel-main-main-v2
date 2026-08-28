@@ -1,0 +1,2008 @@
+{% extends "base.html" %}
+{% from "macros/icons.html" import icon %}
+
+{% block title_extra %} — {{ _('nav_settings') }}{% endblock %}
+
+{% block content %}
+<div class="section-title">
+    <span class="icon">{{ icon('settings') }}</span>
+    {{ _('settings_title') }}
+</div>
+
+<div class="grid"
+    style="display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: var(--space-lg); align-items: start;">
+    <!-- LEFT COLUMN -->
+    <div style="display: flex; flex-direction: column; gap: var(--space-lg);">
+        <!-- BLOCK 1: Appearance -->
+        <div class="card">
+            <h3 class="card-title" style="margin-bottom: var(--space-lg);">{{ _('appearance') }}</h3>
+            <form id="appearanceForm">
+                <div class="form-group">
+                    <label class="form-label">{{ _('title_label') }}</label>
+                    <input type="text" class="form-input" name="title" value="{{ settings.appearance.title }}" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">{{ _('logo_label') }}</label>
+                    <input type="text" class="form-input" name="logo" value="{{ settings.appearance.logo }}" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">{{ _('subtitle_label') }}</label>
+                    <input type="text" class="form-input" name="subtitle" value="{{ settings.appearance.subtitle }}"
+                        required>
+                </div>
+            </form>
+        </div>
+
+        <!-- BLOCK Captcha -->
+        <div class="card">
+            <h3 class="card-title" style="margin-bottom: var(--space-lg);">{{ _('captcha_title') }}</h3>
+            <form id="captchaForm">
+                <div class="form-group">
+                    <label class="form-label">
+                        <input type="checkbox" id="captcha_enabled" {% if captcha_settings.enabled %}checked{% endif %}>
+                        {{ _('enable_captcha') }}
+                    </label>
+                </div>
+            </form>
+        </div>
+
+        <!-- BLOCK Guest Access -->
+        <div class="card">
+            <h3 class="card-title" style="margin-bottom: var(--space-lg);">{{ _('guest_settings_title') }}</h3>
+            <form id="guestForm">
+                <div class="form-group">
+                    <label style="display: flex; align-items: center; gap: var(--space-sm); cursor: pointer;">
+                        <input type="checkbox" id="guest_enabled" {% if settings.guest.enabled %}checked{% endif %}
+                            onchange="document.getElementById('guestFields').style.display = this.checked ? 'block' : 'none'">
+                        {{ _('guest_enable') }}
+                    </label>
+                    <div class="form-hint">{{ _('guest_enable_hint') }}</div>
+                </div>
+
+                <div id="guestFields" style="{% if not settings.guest.enabled %}display:none;{% endif %}">
+                    <div class="form-group">
+                        <label class="form-label">{{ _('guest_link_label') }}</label>
+                        <div style="display:flex; gap: var(--space-sm);">
+                            <input type="text" class="form-input" id="guest_link_display" readonly
+                                value="{% if settings.guest.token %}{{ request.url.scheme }}://{{ request.url.netloc }}/guest/{{ settings.guest.token }}{% endif %}"
+                                placeholder="{{ _('guest_link_placeholder') }}">
+                            <button type="button" class="btn btn-secondary btn-sm btn-icon" onclick="copyGuestLink()" title="{{ _('copy') }}">{{ icon('copy') }}</button>
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="regenGuestToken()" title="{{ _('guest_regen_token') }}">🔄</button>
+                        </div>
+                        <input type="hidden" id="guest_token" value="{{ settings.guest.token or '' }}">
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">{{ _('guest_user_label') }}</label>
+                        <select class="form-select" id="guest_user_id">
+                            <option value="">{{ _('guest_user_none') }}</option>
+                            {% for u in users %}
+                            <option value="{{ u.id }}" {% if settings.guest.user_id == u.id %}selected{% endif %}>
+                                {{ u.username }} ({{ u.role }})
+                            </option>
+                            {% endfor %}
+                        </select>
+                        <div class="form-hint">{{ _('guest_user_hint') }}</div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">{{ _('guest_password_label') }}</label>
+                        <input type="password" class="form-input" id="guest_password"
+                            placeholder="{% if settings.guest.password_hash %}{{ _('guest_password_keep') }}{% else %}{{ _('share_password_hint') }}{% endif %}"
+                            autocomplete="new-password">
+                        {% if settings.guest.password_hash %}
+                        <label style="display:flex; align-items:center; gap:var(--space-sm); margin-top:var(--space-xs); cursor:pointer;">
+                            <input type="checkbox" id="guest_clear_password">
+                            {{ _('guest_clear_password') }}
+                        </label>
+                        {% endif %}
+                    </div>
+
+                    <div class="form-group">
+                        <label style="display: flex; align-items: center; gap: var(--space-sm); cursor: pointer;">
+                            <input type="checkbox" id="guest_allow_create" {% if settings.guest.allow_create %}checked{% endif %}
+                                onchange="document.getElementById('guestCreateFields').style.display = this.checked ? 'block' : 'none'">
+                            {{ _('guest_allow_create') }}
+                        </label>
+                        <div class="form-hint">{{ _('guest_allow_create_hint') }}</div>
+                    </div>
+
+                    <div id="guestCreateFields"
+                        style="{% if not settings.guest.allow_create %}display:none;{% endif %} background: var(--bg-primary); padding: var(--space-md); border-radius: var(--radius-md);">
+                        <div class="form-group">
+                            <label class="form-label">{{ _('server_label') }}</label>
+                            <select class="form-select" id="guest_create_server" onchange="fillGuestProtocols()">
+                                {% if xui_servers %}
+                                <option value="xui" {% if settings.guest.create_protocol == 'xui' %}selected{% endif %}>3x-ui</option>
+                                {% endif %}
+                                {% for s in servers %}
+                                <option value="{{ loop.index0 }}"
+                                    {% if settings.guest.create_protocol != 'xui' and settings.guest.create_server_id == loop.index0 %}selected{% endif %}>
+                                    {{ s.name or s.host }} ({{ s.host }})
+                                </option>
+                                {% endfor %}
+                            </select>
+                            <div class="form-hint">{{ _('server_then_protocol_hint') }}</div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">{{ _('protocol_label') }}</label>
+                            <select class="form-select" id="guest_create_protocol" onchange="updateGuestCreateFields()">
+                                <!-- filled by JS -->
+                            </select>
+                            <input type="hidden" id="guest_create_protocol_pref" value="{{ settings.guest.create_protocol or '' }}">
+                        </div>
+                        <div class="form-group">
+                            <label style="display: flex; align-items: center; gap: var(--space-sm); cursor: pointer;">
+                                <input type="checkbox" id="guest_allow_server_choice" {% if settings.guest.create_allow_server_choice is not defined or settings.guest.create_allow_server_choice %}checked{% endif %}>
+                                {{ _('allow_server_choice') }}
+                            </label>
+                            <div class="form-hint">{{ _('allow_server_choice_hint') }}</div>
+                        </div>
+                        <div class="form-group" id="guestInboundGroup" style="{% if settings.guest.create_protocol != 'xui' %}display:none;{% endif %}">
+                            <label class="form-label">{{ _('xui_server_select_label') }}</label>
+                            <select class="form-select" id="guest_create_xui_panel" onchange="loadGuestInbounds()">
+                                {% for s in xui_servers %}
+                                <option value="{{ s.id }}" {% if settings.guest.create_xui_panel_id == s.id %}selected{% endif %}>{{ s.name }}</option>
+                                {% endfor %}
+                            </select>
+                            <label class="form-label" style="margin-top:var(--space-sm);">{{ _('xui_inbound_label') }}</label>
+                            <select class="form-select" id="guest_create_inbound_id">
+                                <option value="0">{{ _('invite_inbound_loading') }}</option>
+                            </select>
+                            <div class="form-hint">{{ _('xui_inbound_hint') }}</div>
+                        </div>
+                    </div>
+                </div>
+            </form>
+        </div>
+
+        <!-- BLOCK Telegram Bot -->
+        <div class="card">
+            <h3 class="card-title" style="margin-bottom: var(--space-lg);">{{ _('telegram_bot_title') }}</h3>
+            <form id="telegramForm">
+                <div class="form-group">
+                    <label class="form-label">{{ _('bot_token_label') }}</label>
+                    <input type="text" class="form-input" id="tg_token" value="{{ telegram_settings.token or '' }}"
+                        placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11">
+                </div>
+                <div style="display: flex; align-items: center; gap: var(--space-md); margin-top: var(--space-md);">
+                    <div style="display: flex; align-items: center; gap: var(--space-sm);">
+                        <span style="font-size: 0.85rem; color: var(--text-muted);">{{ _('bot_status') }}:</span>
+                        {% if bot_running %}
+                        <span class="badge badge-success" id="botStatusBadge">{{ _('bot_running') }}</span>
+                        {% else %}
+                        <span class="badge badge-secondary" id="botStatusBadge">{{ _('bot_stopped') }}</span>
+                        {% endif %}
+                    </div>
+                    <button type="button" class="btn btn-secondary btn-sm" onclick="toggleBot()" id="toggleBotBtn">
+                        <span id="toggleBotBtnText">{% if bot_running %}{{ _('bot_stop_btn') }}{% else %}{{
+                            _('bot_start_btn') }}{% endif %}</span>
+                        <div class="spinner hidden" id="toggleBotSpinner" style="width:14px;height:14px;"></div>
+                    </button>
+                </div>
+                <p class="form-hint" style="margin-top: var(--space-sm);">
+                    {{ _('bot_hint') }}
+                </p>
+            </form>
+        </div>
+
+        <!-- BLOCK 4: API Docs -->
+        <div class="card">
+            <h3 class="card-title" style="margin-bottom: var(--space-lg);">{{ _('api_docs_title') }}</h3>
+            <div style="display: flex; flex-direction: column; gap: var(--space-md);">
+                <a href="/docs" target="_blank" class="btn btn-secondary"
+                    style="justify-content: flex-start; text-decoration: none;">
+                    <span style="font-size: 1.2rem; margin-right: 10px;">📖</span>
+                    <div style="text-align: left;">
+                        <div style="font-weight: 600;">Swagger UI</div>
+                        <div style="font-size: 0.75rem; opacity: 0.7;">{{ _('api_docs_hint') }}</div>
+                    </div>
+                </a>
+                <a href="/redoc" target="_blank" class="btn btn-secondary"
+                    style="justify-content: flex-start; text-decoration: none;">
+                    <span style="font-size: 1.2rem; margin-right: 10px;">📑</span>
+                    <div style="text-align: left;">
+                        <div style="font-weight: 600;">ReDoc</div>
+                        <div style="font-size: 0.75rem; opacity: 0.7;">{{ _('api_docs_hint') }}</div>
+                    </div>
+                </a>
+            </div>
+            <p class="form-hint" style="margin-top: var(--space-md);">{{ _('api_docs_hint') }}</p>
+        </div>
+
+        <!-- BLOCK Tunnels -->
+        <div class="card tunnels-card">
+            <div class="tunnels-header">
+                <h3 class="card-title">🌍 {{ _('tunnels_title') }}</h3>
+                <p class="tunnels-subtitle">{{ _('tunnels_subtitle') }}</p>
+            </div>
+
+            <div class="tunnels-local">
+                <div class="tunnels-local-icon" aria-hidden="true">🏠</div>
+                <div class="tunnels-local-body">
+                    <div class="tunnels-local-label">{{ _('local_server') }}</div>
+                    <div class="tunnels-local-url">
+                        <code id="localServerUrl">{{ request.url.scheme }}://{{ request.url.netloc }}</code>
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="copyElementText('localServerUrl')">{{ _('copy') }}</button>
+                    </div>
+                </div>
+                <span class="tunnel-status-pill tunnel-status-pill--ok">{{ _('active') }}</span>
+            </div>
+
+            <div class="tunnels-section">
+                <h4 class="tunnels-section-title">{{ _('tunnels_section_inbound') }}</h4>
+                <div class="tunnels-grid">
+                    <article class="tunnel-card tunnel-row" data-provider="cloudflare" id="tunnelCard-cloudflare">
+                        <div class="tunnel-card-head">
+                            <div class="tunnel-card-icon tunnel-card-icon--cloudflare" aria-hidden="true">☁</div>
+                            <div class="tunnel-card-meta">
+                                <h5 class="tunnel-card-title">Cloudflare Quick Tunnel</h5>
+                                <p class="tunnel-card-desc">{{ _('tunnel_cloudflare_desc') }}</p>
+                            </div>
+                            <span class="tunnel-status-pill" id="cloudflareInstallBadge">{{ _('not_installed') }}</span>
+                        </div>
+                        <div class="tunnel-card-body">
+                            <div id="cloudflarePublicUrls" class="tunnel-url-box tunnel-url-box--empty">{{ _('tunnel_no_public_url') }}</div>
+                        </div>
+                        <div class="tunnel-card-actions tunnel-card-actions--triple">
+                            <button type="button" class="btn btn-primary btn-sm" id="cloudflareTunnelBtn" onclick="enableTunnel('cloudflare')">
+                                <span id="cloudflareTunnelBtnText">{{ _('tunnel_install_enable') }}</span>
+                                <div class="spinner hidden" id="cloudflareTunnelSpinner" style="width:14px; height:14px;"></div>
+                            </button>
+                            <button type="button" class="btn btn-secondary btn-sm hidden" id="cloudflareStopBtn" onclick="stopTunnel('cloudflare')">
+                                <span id="cloudflareStopBtnText">{{ _('tunnel_stop') }}</span>
+                                <div class="spinner hidden" id="cloudflareStopSpinner" style="width:14px; height:14px;"></div>
+                            </button>
+                            <button type="button" class="btn btn-danger btn-sm hidden" id="cloudflareDeleteBtn" onclick="deleteTunnel('cloudflare')">
+                                <span id="cloudflareDeleteBtnText">{{ _('tunnel_delete') }}</span>
+                                <div class="spinner hidden" id="cloudflareDeleteSpinner" style="width:14px; height:14px;"></div>
+                            </button>
+                        </div>
+                    </article>
+
+                    <article class="tunnel-card tunnel-row" data-provider="ngrok" id="tunnelCard-ngrok">
+                        <div class="tunnel-card-head">
+                            <div class="tunnel-card-icon tunnel-card-icon--ngrok" aria-hidden="true">N</div>
+                            <div class="tunnel-card-meta">
+                                <h5 class="tunnel-card-title">ngrok</h5>
+                                <p class="tunnel-card-desc">{{ _('tunnel_ngrok_desc') }}</p>
+                            </div>
+                            <span class="tunnel-status-pill" id="ngrokInstallBadge">{{ _('not_installed') }}</span>
+                        </div>
+                        <div class="tunnel-card-body">
+                            <input type="password" class="form-input" id="ngrokAuthtoken" placeholder="{{ _('ngrok_authtoken_placeholder') }}" autocomplete="off">
+                            <div id="ngrokPublicUrls" class="tunnel-url-box tunnel-url-box--empty">{{ _('tunnel_no_public_url') }}</div>
+                        </div>
+                        <div class="tunnel-card-actions tunnel-card-actions--triple">
+                            <button type="button" class="btn btn-primary btn-sm" id="ngrokTunnelBtn" onclick="enableTunnel('ngrok')">
+                                <span id="ngrokTunnelBtnText">{{ _('tunnel_install_enable') }}</span>
+                                <div class="spinner hidden" id="ngrokTunnelSpinner" style="width:14px; height:14px;"></div>
+                            </button>
+                            <button type="button" class="btn btn-secondary btn-sm hidden" id="ngrokStopBtn" onclick="stopTunnel('ngrok')">
+                                <span id="ngrokStopBtnText">{{ _('tunnel_stop') }}</span>
+                                <div class="spinner hidden" id="ngrokStopSpinner" style="width:14px; height:14px;"></div>
+                            </button>
+                            <button type="button" class="btn btn-danger btn-sm hidden" id="ngrokDeleteBtn" onclick="deleteTunnel('ngrok')">
+                                <span id="ngrokDeleteBtnText">{{ _('tunnel_delete') }}</span>
+                                <div class="spinner hidden" id="ngrokDeleteSpinner" style="width:14px; height:14px;"></div>
+                            </button>
+                        </div>
+                    </article>
+                </div>
+            </div>
+
+            <div class="tunnels-section">
+                <h4 class="tunnels-section-title">{{ _('tunnels_section_outbound') }}</h4>
+                <div class="tunnels-grid">
+                    <article class="tunnel-card tunnel-row" data-provider="warp" id="tunnelCard-warp">
+                        <div class="tunnel-card-head">
+                            <div class="tunnel-card-icon tunnel-card-icon--warp" aria-hidden="true">W</div>
+                            <div class="tunnel-card-meta">
+                                <h5 class="tunnel-card-title">Cloudflare WARP</h5>
+                                <p class="tunnel-card-desc">{{ _('tunnel_warp_desc') }}</p>
+                            </div>
+                            <span class="tunnel-status-pill" id="warpInstallBadge">{{ _('not_installed') }}</span>
+                        </div>
+                        <div class="tunnel-card-body">
+                            <p id="warpStatusText" class="tunnel-status-line">{{ _('warp_status_unknown') }}</p>
+                            <p id="warpHintText" class="tunnel-hint">{{ _('warp_hint') }}</p>
+                        </div>
+                        <div class="tunnel-card-actions">
+                            <button type="button" class="btn btn-primary btn-sm" id="warpConnectBtn" onclick="connectWarp()">
+                                <span id="warpConnectBtnText">{{ _('warp_connect') }}</span>
+                                <div class="spinner hidden" id="warpConnectSpinner" style="width:14px; height:14px;"></div>
+                            </button>
+                            <button type="button" class="btn btn-secondary btn-sm hidden" id="warpDisconnectBtn" onclick="disconnectWarp()">
+                                <span id="warpDisconnectBtnText">{{ _('warp_disconnect') }}</span>
+                                <div class="spinner hidden" id="warpDisconnectSpinner" style="width:14px; height:14px;"></div>
+                            </button>
+                        </div>
+                    </article>
+
+                    <article class="tunnel-card tunnel-row" data-provider="nordvpn" id="tunnelCard-nordvpn">
+                        <div class="tunnel-card-head">
+                            <div class="tunnel-card-icon tunnel-card-icon--nordvpn" aria-hidden="true">N</div>
+                            <div class="tunnel-card-meta">
+                                <h5 class="tunnel-card-title">NordVPN</h5>
+                                <p class="tunnel-card-desc">{{ _('tunnel_nordvpn_desc') }}</p>
+                            </div>
+                            <span class="tunnel-status-pill" id="nordvpnInstallBadge">{{ _('not_installed') }}</span>
+                        </div>
+                        <div class="tunnel-card-body">
+                            <p id="nordvpnStatusText" class="tunnel-status-line">{{ _('nordvpn_status_unknown') }}</p>
+                            <p id="nordvpnServerText" class="tunnel-status-line tunnel-status-line--server hidden"></p>
+                            <p id="nordvpnHintText" class="tunnel-hint">{{ _('nordvpn_hint') }}</p>
+                            <div class="tunnel-nordvpn-fields">
+                                <input type="text" class="form-input" id="nordvpnCountry" placeholder="{{ _('nordvpn_country_placeholder') }}" autocomplete="off">
+                                <input type="text" class="form-input" id="nordvpnCity" placeholder="{{ _('nordvpn_city_placeholder') }}" autocomplete="off">
+                            </div>
+                        </div>
+                        <div class="tunnel-card-actions">
+                            <button type="button" class="btn btn-primary btn-sm" id="nordvpnConnectBtn" onclick="connectNordvpn()">
+                                <span id="nordvpnConnectBtnText">{{ _('nordvpn_connect') }}</span>
+                                <div class="spinner hidden" id="nordvpnConnectSpinner" style="width:14px; height:14px;"></div>
+                            </button>
+                            <button type="button" class="btn btn-secondary btn-sm hidden" id="nordvpnDisconnectBtn" onclick="disconnectNordvpn()">
+                                <span id="nordvpnDisconnectBtnText">{{ _('nordvpn_disconnect') }}</span>
+                                <div class="spinner hidden" id="nordvpnDisconnectSpinner" style="width:14px; height:14px;"></div>
+                            </button>
+                        </div>
+                    </article>
+                </div>
+            </div>
+
+            <p class="tunnels-footnote">{{ _('tunnels_hint') }}</p>
+        </div>
+
+        <!-- BLOCK SSL/HTTPS -->
+        <div class="card">
+            <h3 class="card-title" style="margin-bottom: var(--space-lg);">🔒 {{ _('ssl_title') }}</h3>
+            <form id="sslForm">
+                <div class="form-group">
+                    <label class="form-label">
+                        <input type="checkbox" id="ssl_enabled" {% if settings.get('ssl', {}).get('enabled') %}checked{% endif %}>
+                        {{ _('enable_https') }}
+                    </label>
+                </div>
+                <div class="form-group" style="margin-top: var(--space-md);">
+                    <label class="form-label">{{ _('panel_port_label') }}</label>
+                    <input type="number" class="form-input" id="panel_port" value="{{ settings.get('ssl', {}).get('panel_port', 5000) }}" placeholder="5000">
+                </div>
+                <div id="sslFields" style="{% if not settings.get('ssl', {}).get('enabled') %}display:none;{% endif %} margin-top: var(--space-md);">
+                    <div class="form-group">
+                        <label class="form-label">{{ _('domain_label') }}</label>
+                        <input type="text" class="form-input" id="ssl_domain" value="{{ settings.get('ssl', {}).get('domain', '') }}" placeholder="vpn.example.com">
+                    </div>
+
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-md);">
+                        <div class="form-group">
+                            <label class="form-label">{{ _('cert_path_label') }}</label>
+                            <input type="text" class="form-input" id="ssl_cert_path" value="{{ settings.get('ssl', {}).get('cert_path', '') }}" placeholder="/etc/amnezia/cert.pem">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">{{ _('key_path_label') }}</label>
+                            <input type="text" class="form-input" id="ssl_key_path" value="{{ settings.get('ssl', {}).get('key_path', '') }}" placeholder="/etc/amnezia/key.pem">
+                        </div>
+                    </div>
+
+                    <div class="divider" style="margin: var(--space-md) 0;">{{ _('or_paste_text') }}</div>
+
+                    <div class="form-group">
+                        <label class="form-label">{{ _('cert_text_label') }}</label>
+                        <textarea class="form-input" id="ssl_cert_text" rows="4" placeholder="-----BEGIN CERTIFICATE----- ...">{{ settings.get('ssl', {}).get('cert_text', '') }}</textarea>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">{{ _('key_text_label') }}</label>
+                        <textarea class="form-input" id="ssl_key_text" rows="4" placeholder="-----BEGIN PRIVATE KEY----- ...">{{ settings.get('ssl', {}).get('key_text', '') }}</textarea>
+                    </div>
+
+                    <p class="form-hint">{{ _('ssl_hint') }}</p>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- RIGHT COLUMN -->
+    <div style="display: flex; flex-direction: column; gap: var(--space-lg);">
+        <!-- BLOCK 3: Import Users -->
+        <div class="card">
+            <h3 class="card-title" style="margin-bottom: var(--space-lg);">{{ _('import_users_title') }}</h3>
+            <form id="syncForm">
+                <div class="form-group" style="margin-bottom: var(--space-lg);">
+                    <label class="form-label">{{ _('import_source_label') }}</label>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-sm);">
+                        <label style="display: flex; align-items: center; gap: var(--space-sm); cursor: pointer;">
+                            <input type="checkbox" name="remnawave_sync" {% if settings.sync.remnawave_sync %}checked{%
+                                endif %}> Remnawave
+                        </label>
+                        <label
+                            style="display: flex; align-items: center; gap: var(--space-sm); cursor: not-allowed; color: var(--text-muted);">
+                            <input type="checkbox" disabled> Marzban
+                        </label>
+                        <label style="display: flex; align-items: center; gap: var(--space-sm); cursor: pointer;">
+                            <input type="checkbox" name="xui_sync" {% if settings.sync.xui_sync %}checked{% endif %}>
+                            3x-ui
+                        </label>
+                        <label
+                            style="display: flex; align-items: center; gap: var(--space-sm); cursor: not-allowed; color: var(--text-muted);">
+                            <input type="checkbox" disabled> Hiddify
+                        </label>
+                        <label
+                            style="display: flex; align-items: center; gap: var(--space-sm); cursor: not-allowed; color: var(--text-muted);">
+                            <input type="checkbox" disabled> LDAP
+                        </label>
+                    </div>
+                </div>
+
+                <div id="remnawaveFields"
+                    style="{% if not settings.sync.remnawave_sync %}display:none;{% endif %} border-top: 1px solid var(--border-color); padding-top: var(--space-md);">
+                    <div class="form-group">
+                        <label class="form-label">{{ _('remnawave_url_label') }}</label>
+                        <input type="url" class="form-input" name="remnawave_url"
+                            value="{{ settings.sync.remnawave_url }}" placeholder="https://vpn.example.com">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">{{ _('api_key_label') }}</label>
+                        <input type="password" class="form-input" name="remnawave_api_key"
+                            value="{{ settings.sync.remnawave_api_key }}" placeholder="Your secret key">
+                    </div>
+
+                    <div class="form-group">
+                        <label
+                            style="display: flex; align-items: center; gap: var(--space-sm); cursor: pointer; margin-bottom: var(--space-xs);">
+                            <input type="checkbox" name="remnawave_sync_users" {% if settings.sync.remnawave_sync_users
+                                %}checked{% endif %}>
+                            {{ _('enable_sync') }}
+                        </label>
+                        <div class="form-hint"
+                            style="margin-left: var(--space-lg); line-height: 1.4; margin-bottom: var(--space-sm);">
+                            {{ _('sync_hint') }}
+                        </div>
+                        <div style="display: flex; gap: var(--space-sm); margin-left: var(--space-lg);">
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="syncRemnawaveNow()"
+                                id="syncNowBtn">
+                                <span id="syncNowBtnText">🔄 {{ _('sync_now_btn') }}</span>
+                                <div class="spinner hidden" id="syncNowSpinner" style="width:14px; height:14px;"></div>
+                            </button>
+                            <button type="button" class="btn btn-danger btn-sm" onclick="deleteSyncRemnawave()"
+                                id="syncDelBtn">
+                                <span id="syncDelBtnText">{{ icon('trash') }} {{ _('delete_sync_btn') }}</span>
+                                <div class="spinner hidden" id="syncDelSpinner" style="width:14px; height:14px;"></div>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label style="display: flex; align-items: center; gap: var(--space-sm); cursor: pointer;">
+                            <input type="checkbox" name="remnawave_create_conns" id="syncCreateConns" {% if
+                                settings.sync.remnawave_create_conns %}checked{% endif %}>
+                            {{ _('auto_create_conns') }}
+                        </label>
+                    </div>
+
+                    <div id="autoConnFields"
+                        style="{% if not settings.sync.remnawave_create_conns %}display:none;{% endif %} background: var(--bg-primary); padding: var(--space-md); border-radius: var(--radius-md); margin-top: var(--space-sm);">
+                        <div class="form-group">
+                            <label class="form-label">{{ _('sync_server_label') }}</label>
+                            <select class="form-select" name="remnawave_server_id" onchange="updateProtocolsForSync()">
+                                {% for s in servers %}
+                                <option value="{{ loop.index0 }}" {% if settings.sync.remnawave_server_id==loop.index0
+                                    %}selected{% endif %}>{{ s.name or s.host }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">{{ _('protocol_label') }}</label>
+                            <select class="form-select" name="remnawave_protocol" id="syncProtocolSelect">
+                                <option value="awg" {% if settings.sync.remnawave_protocol=='awg' %}selected{% endif %}>
+                                    AmneziaWG</option>
+                                <option value="awg3" {% if settings.sync.remnawave_protocol=='awg3' %}selected{% endif %}>
+                                    AmneziaWG 3.1</option>
+                                <option value="awg2" {% if settings.sync.remnawave_protocol=='awg2' %}selected{% endif %}>
+                                    AmneziaWG 2.0</option>
+                                <option value="awg_legacy" {% if settings.sync.remnawave_protocol=='awg_legacy' %}selected{% endif %}>
+                                    AWG Legacy</option>
+                                <option value="xray" {% if settings.sync.remnawave_protocol=='xray' %}selected{% endif %}>
+                                    Xray</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="xuiFields"
+                    style="{% if not settings.sync.xui_sync %}display:none;{% endif %} border-top: 1px solid var(--border-color); padding-top: var(--space-md); margin-top: var(--space-md);">
+                    <div class="form-hint" style="margin-bottom: var(--space-md);">
+                        {{ _('xui_servers_manage_hint') }}
+                    </div>
+
+                    <div class="form-group">
+                        <label
+                            style="display: flex; align-items: center; gap: var(--space-sm); cursor: pointer; margin-bottom: var(--space-xs);">
+                            <input type="checkbox" name="xui_sync_users" {% if settings.sync.xui_sync_users %}checked{% endif %}>
+                            {{ _('enable_sync') }}
+                        </label>
+                        <div class="form-hint"
+                            style="margin-left: var(--space-lg); line-height: 1.4; margin-bottom: var(--space-sm);">
+                            {{ _('xui_sync_hint') }}
+                        </div>
+                        <div style="display: flex; gap: var(--space-sm); margin-left: var(--space-lg);">
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="syncXuiNow()" id="xuiSyncNowBtn">
+                                <span id="xuiSyncNowBtnText">🔄 {{ _('sync_now_btn') }}</span>
+                                <div class="spinner hidden" id="xuiSyncNowSpinner" style="width:14px; height:14px;"></div>
+                            </button>
+                            <button type="button" class="btn btn-danger btn-sm" onclick="deleteSyncXui()" id="xuiSyncDelBtn">
+                                <span id="xuiSyncDelBtnText">{{ icon('trash') }} {{ _('delete_sync_btn') }}</span>
+                                <div class="spinner hidden" id="xuiSyncDelSpinner" style="width:14px; height:14px;"></div>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label style="display: flex; align-items: center; gap: var(--space-sm); cursor: pointer;">
+                            <input type="checkbox" name="xui_create_conns" id="xuiSyncCreateConns" {% if
+                                settings.sync.xui_create_conns %}checked{% endif %}>
+                            {{ _('auto_create_conns') }}
+                        </label>
+                    </div>
+
+                    <div id="xuiAutoConnFields"
+                        style="{% if not settings.sync.xui_create_conns %}display:none;{% endif %} background: var(--bg-primary); padding: var(--space-md); border-radius: var(--radius-md); margin-top: var(--space-sm);">
+                        <div class="form-group">
+                            <label class="form-label">{{ _('sync_server_label') }}</label>
+                            <select class="form-select" name="xui_server_id" onchange="updateProtocolsForXuiSync()">
+                                {% for s in servers %}
+                                <option value="{{ loop.index0 }}" {% if settings.sync.xui_server_id==loop.index0
+                                    %}selected{% endif %}>{{ s.name or s.host }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">{{ _('protocol_label') }}</label>
+                            <select class="form-select" name="xui_protocol" id="xuiSyncProtocolSelect">
+                                <option value="xray" {% if settings.sync.xui_protocol=='xray' %}selected{% endif %}>Xray</option>
+                                <option value="awg" {% if settings.sync.xui_protocol=='awg' %}selected{% endif %}>AmneziaWG</option>
+                                <option value="awg3" {% if settings.sync.xui_protocol=='awg3' %}selected{% endif %}>AmneziaWG 3.1</option>
+                                <option value="awg2" {% if settings.sync.xui_protocol=='awg2' %}selected{% endif %}>AmneziaWG 2.0</option>
+                            </select>
+                        </div>
+                    </div>
+                    <input type="hidden" name="xui_url" value="{{ settings.sync.xui_url or '' }}">
+                    <input type="hidden" name="xui_sub_url" value="{{ settings.sync.xui_sub_url or '' }}">
+                    <input type="hidden" name="xui_api_token" value="{{ settings.sync.xui_api_token or '' }}">
+                    <input type="hidden" name="xui_username" value="{{ settings.sync.xui_username or '' }}">
+                    <input type="hidden" name="xui_password" value="{{ settings.sync.xui_password or '' }}">
+                    <input type="hidden" name="xui_inbound_id" value="{{ settings.sync.xui_inbound_id or 0 }}">
+                </div>
+
+            </form>
+        </div>
+
+        <!-- BLOCK: 3x-ui servers (multi) -->
+        <div class="card" style="margin-top: var(--space-lg);">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:var(--space-md); margin-bottom: var(--space-lg);">
+                <h3 class="card-title" style="margin:0;">{{ _('xui_servers_title') }}</h3>
+                <button type="button" class="btn btn-primary btn-sm" onclick="openXuiServerModal()">+ {{ _('xui_server_add') }}</button>
+            </div>
+            <div class="form-hint" style="margin-bottom: var(--space-md);">{{ _('xui_servers_hint') }}</div>
+            <div id="xuiServersList">
+                {% if xui_servers %}
+                {% for s in xui_servers %}
+                <div class="client-item" style="margin-bottom:var(--space-sm);" data-xui-id="{{ s.id }}">
+                    <div class="client-info" style="flex:1; min-width:0;">
+                        <div class="client-avatar">🌐</div>
+                        <div style="min-width:0;">
+                            <div class="client-name">{{ s.name }}</div>
+                            <div class="client-meta" style="word-break:break-all;">
+                                <span>{{ s.url }}</span>
+                                {% if s.sub_url %}<span>· sub: {{ s.sub_url }}</span>{% endif %}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="client-actions">
+                        <button class="btn btn-secondary btn-sm" type="button" onclick='editXuiServer({{ s | tojson }})'>{{ _('edit') }}</button>
+                        <button class="btn btn-danger btn-sm" type="button" onclick="deleteXuiServer('{{ s.id }}')">{{ _('delete') }}</button>
+                    </div>
+                </div>
+                {% endfor %}
+                {% else %}
+                <div style="text-align:center; padding:var(--space-lg); color:var(--text-muted);">{{ _('xui_servers_empty') }}</div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- BLOCK: Backup / Import -->
+        <div class="card" style="margin-top: var(--space-lg);">
+            <h3 class="card-title" style="margin-bottom: var(--space-lg);">📤 {{ _('backup_title') }}</h3>
+            <div style="display: flex; flex-direction: column; gap: var(--space-md);">
+                <div>
+                    <div class="form-label" style="margin-bottom: var(--space-sm);">{{ _('backup_export_label') }}</div>
+                    <div style="display: flex; gap: var(--space-sm); flex-wrap: wrap;">
+                        <a href="/api/settings/backup/download" class="btn btn-secondary"
+                            style="flex:1; min-width:200px; text-decoration:none; display:flex; align-items:center; justify-content:center; gap:var(--space-sm);">
+                            <span>⬇️</span> {{ _('download_backup') }}
+                        </a>
+                        <a href="/api/settings/backup/download/json" class="btn btn-secondary"
+                            style="flex:1; min-width:200px; text-decoration:none; display:flex; align-items:center; justify-content:center; gap:var(--space-sm);">
+                            <span>📄</span> {{ _('download_backup_json') }}
+                        </a>
+                    </div>
+                </div>
+                <div style="border-top: 1px solid var(--border-color); padding-top: var(--space-md);">
+                    <div class="form-label" style="margin-bottom: var(--space-sm);">{{ _('backup_import_label') }}</div>
+                    <div style="display: flex; flex-direction: column; gap: var(--space-sm);">
+                        <input type="file" id="backupFile" accept=".sql,.sql.gz,.json,application/sql,application/gzip,application/json"
+                            style="display: none;" onchange="handleRestore(event)">
+                        <button type="button" class="btn btn-primary"
+                            onclick="document.getElementById('backupFile').click()" id="restoreBtn"
+                            style="gap:var(--space-sm);">
+                            <span>⬆️</span> {{ _('import_backup') }}
+                        </button>
+                        <div class="form-hint" id="backupFileName"></div>
+                    </div>
+                </div>
+            </div>
+            <p class="form-hint" style="margin-top: var(--space-sm);">
+                {{ _('backup_hint') }}
+            </p>
+            <p class="form-hint" style="margin-top: var(--space-xs);">
+                {{ _('restore_confirm') }}
+            </p>
+        </div>
+
+        <!-- BLOCK: API Tokens -->
+        <div class="card" style="margin-top: var(--space-lg);">
+            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom: var(--space-md);">
+                <h3 class="card-title" style="margin:0;">🔑 {{ _('api_tokens_title') }}</h3>
+                <button type="button" class="btn btn-primary btn-sm" onclick="openCreateTokenModal()">
+                    {{ icon('plus') }} {{ _('api_tokens_create') }}
+                </button>
+            </div>
+            <p class="form-hint" style="margin-bottom: var(--space-md);">
+                {{ _('api_tokens_hint') }}
+            </p>
+            <div id="tokensList">
+                <div class="form-hint" id="tokensEmptyState">{{ _('api_tokens_empty') }}</div>
+            </div>
+        </div>
+
+        <!-- BLOCK: Support / Donate (admin) -->
+        {% set donate_cfg = settings.get('donate') or {} %}
+        <div class="card" style="margin-top: var(--space-lg);">
+            <h3 class="card-title" style="margin-bottom: var(--space-lg);">{{ icon('heart') }} {{ _('donate_settings_title') }}</h3>
+            <p class="form-hint" style="margin-top: 0; margin-bottom: var(--space-md);">{{ _('donate_settings_hint') }}</p>
+            <div class="form-group">
+                <label class="form-label" style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+                    <input type="checkbox" id="donate_enabled" {% if donate_cfg.get('enabled', True) %}checked{% endif %}>
+                    {{ _('donate_enabled') }}
+                </label>
+            </div>
+            <div class="form-group">
+                <label class="form-label">{{ _('donate_intro') }}</label>
+                <textarea class="form-textarea" id="donate_intro" rows="2" placeholder="{{ _('support_intro') }}">{{ donate_cfg.get('intro') or '' }}</textarea>
+            </div>
+            {% for key, label_key in [('sbp', 'donate_sbp'), ('card', 'donate_card'), ('crypto', 'donate_crypto')] %}
+            {% set method = donate_cfg.get(key) or {} %}
+            <div style="border:1px solid var(--border-color); border-radius:var(--radius-md); padding:var(--space-md); margin-bottom:var(--space-md);">
+                <label class="form-label" style="display:flex; align-items:center; gap:8px; cursor:pointer; margin-bottom:var(--space-sm);">
+                    <input type="checkbox" id="donate_{{ key }}_enabled" {% if method.get('enabled', True) %}checked{% endif %}>
+                    {{ _(label_key) }}
+                </label>
+                <div class="form-group" style="margin-bottom:var(--space-sm);">
+                    <label class="form-label">{{ _('donate_method_title') }}</label>
+                    <input type="text" class="form-input" id="donate_{{ key }}_title" value="{{ method.get('title') or '' }}" placeholder="{{ _(label_key) }}">
+                </div>
+                <div class="form-group" style="margin-bottom:0;">
+                    <label class="form-label">{{ _('donate_method_details') }}</label>
+                    <textarea class="form-textarea" id="donate_{{ key }}_details" rows="3" placeholder="{{ _('donate_details_placeholder') }}">{{ method.get('details') or '' }}</textarea>
+                </div>
+            </div>
+            {% endfor %}
+            <p class="form-hint">{{ _('donate_preview_hint') }} <a href="/support" target="_blank" rel="noopener">/support</a></p>
+        </div>
+
+        <!-- BLOCK: About & Updates -->
+        <div class="card" style="margin-top: var(--space-lg);">
+            <h3 class="card-title" style="margin-bottom: var(--space-lg);">ℹ️ {{ _('about_title') }}</h3>
+            <div style="display: flex; flex-direction: column; gap: var(--space-md);">
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: var(--space-sm) 0; border-bottom: 1px solid var(--border-color);">
+                    <span style="font-weight: 500;">{{ _('current_version') }}</span>
+                    <span class="badge badge-info" id="currentVersionBadge" style="font-size: 0.95rem;">{{ current_version }}</span>
+                </div>
+                
+                <div id="updateStatus" class="hidden" style="padding: var(--space-md); border-radius: var(--radius-md); background: var(--bg-primary); text-align: center;">
+                    <!-- Updated via JS -->
+                </div>
+
+                <div style="display: flex; gap: var(--space-sm); margin-top: var(--space-sm); flex-wrap: wrap;">
+                    <button type="button" class="btn btn-primary" onclick="upgradePanel()" id="upgradePanelBtn" style="flex:1; min-width:180px;">
+                        <span id="upgradePanelBtnText">⬆ {{ _('upgrade_panel') }}</span>
+                        <div class="spinner hidden" id="upgradePanelSpinner" style="width:14px; height:14px;"></div>
+                    </button>
+                    <button type="button" class="btn btn-secondary" onclick="checkForUpdates()" id="checkUpdateBtn" style="flex:1; min-width:140px;">
+                        <span id="checkUpdateBtnText">🔄 {{ _('check_updates') }}</span>
+                        <div class="spinner hidden" id="checkUpdateSpinner" style="width:14px; height:14px;"></div>
+                    </button>
+                    <button type="button" class="btn btn-secondary hidden" onclick="applyPanelUpdate()" id="applyUpdateBtn" style="flex:1; min-width:140px;">
+                        <span id="applyUpdateBtnText">⬆ {{ _('apply_update') }}</span>
+                        <div class="spinner hidden" id="applyUpdateSpinner" style="width:14px; height:14px;"></div>
+                    </button>
+                    <a href="https://git.de4ima.uk/Evilfox/Amnezia-Web-Panel-main/releases" target="_blank" class="btn btn-secondary hidden" id="downloadUpdateBtn" style="flex:1; min-width:140px; text-decoration: none; justify-content: center;">
+                        ⬇️ {{ _('download_update') }}
+                    </a>
+                </div>
+                <p class="form-hint" id="updateModeHint" style="margin:0;">{{ _('auto_update_hint') }}</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div style="margin-top: var(--space-xl); text-align: right;">
+    <button class="btn btn-primary btn-lg" onclick="saveSettings()" id="saveBtn">
+        <span>{{ _('save_changes') }}</span>
+        <div class="spinner hidden" id="saveSpinner"></div>
+    </button>
+</div>
+
+</div>
+
+<!-- ===== 3x-ui Server Modal ===== -->
+<div class="modal-backdrop" id="xuiServerModal">
+    <div class="modal" style="max-width:520px;">
+        <div class="modal-header">
+            <h2 class="modal-title" id="xuiServerModalTitle">{{ _('xui_server_add') }}</h2>
+            <button class="modal-close" onclick="closeModal('xuiServerModal')">×</button>
+        </div>
+        <input type="hidden" id="xuiServerEditId" value="">
+        <div class="form-group">
+            <label class="form-label">{{ _('xui_server_name_label') }}</label>
+            <input class="form-input" type="text" id="xuiServerName" placeholder="US / NL / Home">
+            <div class="form-hint">{{ _('xui_server_name_hint') }}</div>
+        </div>
+        <div class="form-group">
+            <label class="form-label">{{ _('xui_url_label') }}</label>
+            <input class="form-input" type="url" id="xuiServerUrl" placeholder="https://panel.example.com:2053/path">
+            <div class="form-hint">{{ _('xui_url_hint') }}</div>
+        </div>
+        <div class="form-group">
+            <label class="form-label">{{ _('xui_sub_url_label') }}</label>
+            <input class="form-input" type="url" id="xuiServerSubUrl" placeholder="https://sub.example.com:2096/sub">
+            <div class="form-hint">{{ _('xui_sub_url_hint') }}</div>
+        </div>
+        <div class="form-group">
+            <label class="form-label">{{ _('xui_api_token_label') }}</label>
+            <input class="form-input" type="password" id="xuiServerToken" placeholder="{{ _('xui_api_token_placeholder') }}" autocomplete="off">
+            <div class="form-hint">{{ _('xui_api_token_hint') }}</div>
+        </div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:var(--space-sm);">
+            <div class="form-group">
+                <label class="form-label">{{ _('xui_username_label') }}</label>
+                <input class="form-input" type="text" id="xuiServerUser" autocomplete="off">
+            </div>
+            <div class="form-group">
+                <label class="form-label">{{ _('xui_password_label') }}</label>
+                <input class="form-input" type="password" id="xuiServerPass" autocomplete="off">
+            </div>
+        </div>
+        <div class="form-group">
+            <label style="display:flex; align-items:center; gap:var(--space-sm); cursor:pointer;">
+                <input type="checkbox" id="xuiServerEnabled" checked> {{ _('enabled') if False else 'Enabled' }}
+            </label>
+        </div>
+        <div class="form-group">
+            <label style="display:flex; align-items:center; gap:var(--space-sm); cursor:pointer;">
+                <input type="checkbox" id="xuiServerSyncUsers"> {{ _('enable_sync') }}
+            </label>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal('xuiServerModal')">{{ _('cancel') }}</button>
+            <button class="btn btn-primary" onclick="saveXuiServer()" id="xuiServerSaveBtn">
+                <span id="xuiServerSaveText">{{ _('save') }}</span>
+                <div class="spinner hidden" id="xuiServerSaveSpinner" style="width:14px;height:14px;"></div>
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- ===== Create API Token Modal ===== -->
+<div class="modal-backdrop" id="createTokenModal">
+    <div class="modal" style="max-width: 460px;">
+        <div class="modal-header">
+            <h2 class="modal-title">{{ _('api_tokens_create_title') }}</h2>
+            <button class="modal-close" onclick="closeModal('createTokenModal')">×</button>
+        </div>
+        <div class="form-group">
+            <label class="form-label">{{ _('api_tokens_name_label') }}</label>
+            <input class="form-input" type="text" id="createTokenName"
+                placeholder="{{ _('api_tokens_name_placeholder') }}" maxlength="100">
+            <div class="form-hint">{{ _('api_tokens_name_hint') }}</div>
+        </div>
+        <div id="createTokenError" style="color: var(--danger, #ef4444); font-size: 0.85rem; margin-bottom: var(--space-sm);"></div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal('createTokenModal')">{{ _('cancel') }}</button>
+            <button class="btn btn-primary" onclick="submitCreateToken()" id="createTokenBtn">
+                {{ _('api_tokens_create') }}
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- ===== Newly-Created Token Modal (one-time display) ===== -->
+<div class="modal-backdrop" id="newTokenModal">
+    <div class="modal" style="max-width: 560px;">
+        <div class="modal-header">
+            <h2 class="modal-title">{{ _('api_tokens_created_title') }}</h2>
+            <button class="modal-close" onclick="closeModal('newTokenModal')">×</button>
+        </div>
+        <div class="form-group">
+            <label class="form-label">{{ _('api_tokens_name_label') }}</label>
+            <div id="newTokenName" style="font-weight: 600;"></div>
+        </div>
+        <div class="form-group">
+            <label class="form-label">{{ _('api_tokens_value_label') }}</label>
+            <input class="form-input" type="text" id="newTokenValue" readonly
+                style="font-family: 'SF Mono', monospace; font-size: 0.85rem;">
+        </div>
+        <div style="background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.4); border-radius: var(--radius-md); padding: var(--space-md); margin-bottom: var(--space-md);">
+            ⚠️ <strong>{{ _('api_tokens_warning_title') }}</strong>
+            <div class="form-hint" style="margin-top: 4px;">{{ _('api_tokens_warning_body') }}</div>
+        </div>
+        <div class="form-hint" style="margin-bottom: var(--space-sm); font-family: 'SF Mono', monospace; font-size: 0.78rem; padding: var(--space-sm); background: var(--bg-primary); border-radius: var(--radius-sm);">
+            curl -H "Authorization: Bearer &lt;your_token&gt;" {{ request.url.scheme }}://{{ request.url.netloc }}/api/users
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="copyNewToken()">{{ icon('copy') }} {{ _('copy') }}</button>
+            <button class="btn btn-primary" onclick="closeModal('newTokenModal')">{{ _('done') }}</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    const serversData = {{ servers | tojson }};
+    const botCurrentlyRunning = {{ 'true' if bot_running else 'false' }};
+
+    function updateProtocolsForSync() {
+        const serverIdx = document.querySelector('[name="remnawave_server_id"]').value;
+        const protoSelect = document.getElementById('syncProtocolSelect');
+        protoSelect.innerHTML = '';
+
+        if (serverIdx === '' || !serversData[serverIdx]) return;
+
+        const protocols = serversData[serverIdx].protocols || {};
+        let count = 0;
+
+        for (const [key, info] of Object.entries(protocols)) {
+            if (info.installed) {
+                const opt = document.createElement('option');
+                opt.value = key;
+                opt.textContent = key === 'awg' ? 'AmneziaWG' : (key === 'awg3' ? 'AmneziaWG 3.1' : (key === 'awg2' ? 'AmneziaWG 2.0' : (key === 'awg_legacy' ? 'AWG Legacy' : (key === 'xray' ? 'Xray' : key.toUpperCase()))));
+                if (key === "{{ settings.sync.remnawave_protocol }}") opt.selected = true;
+                protoSelect.appendChild(opt);
+                count++;
+            }
+        }
+
+        if (count === 0) {
+            const opt = document.createElement('option');
+            opt.textContent = _('no_protocols');
+            opt.disabled = true;
+            protoSelect.appendChild(opt);
+        }
+    }
+
+    document.querySelector('[name="remnawave_sync"]').addEventListener('change', (e) => {
+        document.getElementById('remnawaveFields').style.display = e.target.checked ? 'block' : 'none';
+    });
+
+    document.querySelector('[name="xui_sync"]').addEventListener('change', (e) => {
+        document.getElementById('xuiFields').style.display = e.target.checked ? 'block' : 'none';
+    });
+
+    function updateProtocolsForXuiSync() {
+        const serverIdx = document.querySelector('[name="xui_server_id"]').value;
+        const protoSelect = document.getElementById('xuiSyncProtocolSelect');
+        protoSelect.innerHTML = '';
+
+        if (serverIdx === '' || !serversData[serverIdx]) return;
+
+        const protocols = serversData[serverIdx].protocols || {};
+        let count = 0;
+
+        for (const [key, info] of Object.entries(protocols)) {
+            if (info.installed) {
+                const opt = document.createElement('option');
+                opt.value = key;
+                opt.textContent = key === 'awg' ? 'AmneziaWG' : (key === 'awg3' ? 'AmneziaWG 3.1' : (key === 'awg2' ? 'AmneziaWG 2.0' : (key === 'awg_legacy' ? 'AWG Legacy' : (key === 'xray' ? 'Xray' : key.toUpperCase()))));
+                if (key === "{{ settings.sync.xui_protocol }}") opt.selected = true;
+                protoSelect.appendChild(opt);
+                count++;
+            }
+        }
+
+        if (count === 0) {
+            const opt = document.createElement('option');
+            opt.textContent = _('no_protocols');
+            opt.disabled = true;
+            protoSelect.appendChild(opt);
+        }
+    }
+
+    function openXuiServerModal(server) {
+        document.getElementById('xuiServerEditId').value = server?.id || '';
+        document.getElementById('xuiServerModalTitle').textContent = server?.id ? (_('edit') + ' — 3x-ui') : _('xui_server_add');
+        document.getElementById('xuiServerName').value = server?.name || '';
+        document.getElementById('xuiServerUrl').value = server?.url || '';
+        document.getElementById('xuiServerSubUrl').value = server?.sub_url || '';
+        document.getElementById('xuiServerToken').value = '';
+        document.getElementById('xuiServerUser').value = server?.username || '';
+        document.getElementById('xuiServerPass').value = '';
+        document.getElementById('xuiServerEnabled').checked = server ? !!server.enabled : true;
+        document.getElementById('xuiServerSyncUsers').checked = !!(server && server.sync_users);
+        openModal('xuiServerModal');
+    }
+
+    function editXuiServer(server) { openXuiServerModal(server); }
+
+    async function saveXuiServer() {
+        const id = document.getElementById('xuiServerEditId').value;
+        const body = {
+            name: document.getElementById('xuiServerName').value.trim(),
+            url: document.getElementById('xuiServerUrl').value.trim(),
+            sub_url: document.getElementById('xuiServerSubUrl').value.trim(),
+            api_token: document.getElementById('xuiServerToken').value,
+            username: document.getElementById('xuiServerUser').value.trim(),
+            password: document.getElementById('xuiServerPass').value,
+            enabled: document.getElementById('xuiServerEnabled').checked,
+            sync_users: document.getElementById('xuiServerSyncUsers').checked,
+            default_inbound_id: 0,
+        };
+        if (!body.url) { showToast(_('error') + ': URL', 'error'); return; }
+        const btn = document.getElementById('xuiServerSaveBtn');
+        const text = document.getElementById('xuiServerSaveText');
+        const spinner = document.getElementById('xuiServerSaveSpinner');
+        btn.disabled = true; text.textContent = _('saving') || 'Saving...'; spinner.classList.remove('hidden');
+        try {
+            if (id) await apiCall(`/api/settings/xui/servers/${encodeURIComponent(id)}`, 'PUT', body);
+            else await apiCall('/api/settings/xui/servers', 'POST', body);
+            showToast(_('saved') || 'OK', 'success');
+            closeModal('xuiServerModal');
+            setTimeout(() => location.reload(), 400);
+        } catch (err) {
+            showToast(_('error') + ': ' + err.message, 'error');
+        } finally {
+            btn.disabled = false; text.textContent = _('save'); spinner.classList.add('hidden');
+        }
+    }
+
+    async function deleteXuiServer(id) {
+        if (!confirm(_('xui_server_delete_confirm') || 'Delete this 3x-ui server?')) return;
+        try {
+            await apiCall(`/api/settings/xui/servers/${encodeURIComponent(id)}`, 'DELETE');
+            showToast(_('deleted') || 'OK', 'success');
+            setTimeout(() => location.reload(), 400);
+        } catch (err) {
+            showToast(_('error') + ': ' + err.message, 'error');
+        }
+    }
+
+    async function loadGuestInbounds() {
+        const select = document.getElementById('guest_create_inbound_id');
+        if (!select) return;
+        const preferred = {{ settings.guest.create_inbound_id | default(0) | int }};
+        select.innerHTML = `<option value="">${_('invite_inbound_loading')}</option>`;
+        try {
+            const panelSel = document.getElementById('guest_create_xui_panel');
+            const panelId = panelSel ? panelSel.value : '';
+            const q = panelId ? `?panel_id=${encodeURIComponent(panelId)}` : '';
+            const res = await fetch('/api/settings/xui/inbounds' + q);
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || 'Failed to load inbounds');
+            const list = data.inbounds || [];
+            if (!list.length) {
+                select.innerHTML = `<option value="">${_('invite_inbound_empty')}</option>`;
+                return;
+            }
+            select.innerHTML = '';
+            list.forEach((ib, idx) => {
+                const opt = document.createElement('option');
+                opt.value = ib.id;
+                opt.textContent = `${ib.remark || 'VLESS'} (:${ib.port})`;
+                if (preferred && String(ib.id) === String(preferred)) opt.selected = true;
+                else if (!preferred && idx === 0) opt.selected = true;
+                select.appendChild(opt);
+            });
+        } catch (err) {
+            console.warn('loadGuestInbounds:', err);
+            select.innerHTML = `<option value="">${_('error')}: ${err.message}</option>`;
+        }
+    }
+
+    document.getElementById('syncCreateConns').addEventListener('change', (e) => {
+        document.getElementById('autoConnFields').style.display = e.target.checked ? 'block' : 'none';
+        if (e.target.checked) updateProtocolsForSync();
+    });
+
+    document.getElementById('xuiSyncCreateConns').addEventListener('change', (e) => {
+        document.getElementById('xuiAutoConnFields').style.display = e.target.checked ? 'block' : 'none';
+        if (e.target.checked) updateProtocolsForXuiSync();
+    });
+
+    document.getElementById('ssl_enabled').addEventListener('change', (e) => {
+        document.getElementById('sslFields').style.display = e.target.checked ? 'block' : 'none';
+    });
+
+    let tunnelStatusTimer = null;
+
+    function copyElementText(id) {
+        const el = document.getElementById(id);
+        if (el) copyToClipboard(el.textContent.trim());
+    }
+
+    function renderTunnelUrls(provider, urls) {
+        const el = document.getElementById(`${provider}PublicUrls`);
+        if (!el) return;
+        if (!urls || !urls.length) {
+            el.className = 'tunnel-url-box tunnel-url-box--empty';
+            el.textContent = _('tunnel_no_public_url');
+            return;
+        }
+        el.className = 'tunnel-url-box';
+        el.innerHTML = urls.map((url, idx) => `
+            <div class="tunnel-url-row">
+                <code id="${provider}PublicUrl${idx}">${escapeHTML(url)}</code>
+                <button type="button" class="btn btn-secondary btn-sm" onclick="copyElementText('${provider}PublicUrl${idx}')">${_('copy')}</button>
+            </div>
+        `).join('');
+    }
+
+    function setTunnelStatusPill(badge, { ok, info, text }) {
+        if (!badge) return;
+        badge.className = 'tunnel-status-pill' + (ok ? ' tunnel-status-pill--ok' : (info ? ' tunnel-status-pill--info' : ''));
+        badge.textContent = text;
+    }
+
+    function updateTunnelProvider(provider, status) {
+        const badge = document.getElementById(`${provider}InstallBadge`);
+        const text = document.getElementById(`${provider}TunnelBtnText`);
+        const startBtn = document.getElementById(`${provider}TunnelBtn`);
+        const stopBtn = document.getElementById(`${provider}StopBtn`);
+        const deleteBtn = document.getElementById(`${provider}DeleteBtn`);
+        const card = document.getElementById(`tunnelCard-${provider}`);
+        if (!badge || !text) return;
+
+        const running = !!status.running;
+        setTunnelStatusPill(badge, {
+            ok: running,
+            info: !running && status.installed,
+            text: running ? _('tunnel_running') : (status.installed ? _('installed') : _('not_installed')),
+        });
+        text.textContent = running ? _('tunnel_running') : (status.installed ? _('tunnel_enable') : _('tunnel_install_enable'));
+        if (startBtn) startBtn.disabled = running;
+        if (stopBtn) stopBtn.classList.toggle('hidden', !running);
+        if (deleteBtn) deleteBtn.classList.toggle('hidden', !status.installed);
+        if (card) card.classList.toggle('tunnel-card--running', running);
+        renderTunnelUrls(provider, status.public_urls || (status.public_url ? [status.public_url] : []));
+    }
+
+    async function loadTunnelStatus() {
+        try {
+            const data = await apiCall('/api/settings/tunnels/status');
+            if (data.local_server) document.getElementById('localServerUrl').textContent = data.local_server;
+            updateTunnelProvider('cloudflare', data.cloudflare || {});
+            updateTunnelProvider('ngrok', data.ngrok || {});
+            updateWarpStatus(data.warp || {});
+            updateNordvpnStatus(data.nordvpn || {});
+        } catch (err) {
+            showToast(`${_('error')}: ` + err.message, 'error');
+        }
+    }
+
+    function updateWarpStatus(status) {
+        const badge = document.getElementById('warpInstallBadge');
+        const statusText = document.getElementById('warpStatusText');
+        const hintText = document.getElementById('warpHintText');
+        const connectBtn = document.getElementById('warpConnectBtn');
+        const disconnectBtn = document.getElementById('warpDisconnectBtn');
+        const connectText = document.getElementById('warpConnectBtnText');
+        const card = document.getElementById('tunnelCard-warp');
+        if (!badge || !statusText || !connectBtn || !disconnectBtn || !connectText) return;
+
+        const installed = !!status.installed;
+        const connected = !!status.connected || status.status === 'connected';
+        setTunnelStatusPill(badge, {
+            ok: connected,
+            info: !connected && installed,
+            text: connected ? _('warp_connected') : (installed ? _('installed') : _('not_installed')),
+        });
+
+        const statusKey = `warp_status_${status.status || 'unknown'}`;
+        statusText.textContent = _(statusKey) || status.status || _('warp_status_unknown');
+        hintText.textContent = status.last_error || (installed ? _('warp_hint') : (status.install_hint || _('warp_install_hint')));
+        connectText.textContent = installed ? _('warp_connect') : _('warp_install_required');
+        connectBtn.disabled = connected;
+        disconnectBtn.classList.toggle('hidden', !connected);
+        if (card) card.classList.toggle('tunnel-card--connected', connected);
+    }
+
+    async function connectWarp() {
+        const btn = document.getElementById('warpConnectBtn');
+        const spinner = document.getElementById('warpConnectSpinner');
+        const text = document.getElementById('warpConnectBtnText');
+        btn.disabled = true;
+        spinner.classList.remove('hidden');
+        text.textContent = _('loading');
+
+        try {
+            const status = await apiCall('/api/settings/warp/connect', 'POST');
+            updateWarpStatus(status);
+            showToast(_('warp_connected'), 'success');
+        } catch (err) {
+            showToast(`${_('error')}: ` + err.message, 'error');
+            await loadTunnelStatus();
+        } finally {
+            spinner.classList.add('hidden');
+        }
+    }
+
+    async function disconnectWarp() {
+        const btn = document.getElementById('warpDisconnectBtn');
+        const spinner = document.getElementById('warpDisconnectSpinner');
+        const text = document.getElementById('warpDisconnectBtnText');
+        btn.disabled = true;
+        spinner.classList.remove('hidden');
+        text.textContent = _('loading');
+
+        try {
+            const status = await apiCall('/api/settings/warp/disconnect', 'POST');
+            updateWarpStatus(status);
+            showToast(_('warp_disconnected'), 'success');
+        } catch (err) {
+            showToast(`${_('error')}: ` + err.message, 'error');
+            await loadTunnelStatus();
+        } finally {
+            btn.disabled = false;
+            text.textContent = _('warp_disconnect');
+            spinner.classList.add('hidden');
+        }
+    }
+
+    function updateNordvpnStatus(status) {
+        const badge = document.getElementById('nordvpnInstallBadge');
+        const statusText = document.getElementById('nordvpnStatusText');
+        const serverText = document.getElementById('nordvpnServerText');
+        const hintText = document.getElementById('nordvpnHintText');
+        const connectBtn = document.getElementById('nordvpnConnectBtn');
+        const disconnectBtn = document.getElementById('nordvpnDisconnectBtn');
+        const connectText = document.getElementById('nordvpnConnectBtnText');
+        const card = document.getElementById('tunnelCard-nordvpn');
+        if (!badge || !statusText || !connectBtn || !disconnectBtn || !connectText) return;
+
+        const installed = !!status.installed;
+        const connected = !!status.connected || status.status === 'connected';
+        setTunnelStatusPill(badge, {
+            ok: connected,
+            info: !connected && installed,
+            text: connected ? _('nordvpn_connected') : (installed ? _('installed') : _('not_installed')),
+        });
+
+        const statusKey = `nordvpn_status_${status.status || 'unknown'}`;
+        statusText.textContent = _(statusKey) || status.status || _('nordvpn_status_unknown');
+        if (serverText) {
+            const serverLine = status.server || '';
+            serverText.textContent = serverLine;
+            serverText.classList.toggle('hidden', !serverLine);
+        }
+        hintText.textContent = status.last_error || (installed ? _('nordvpn_hint') : (status.install_hint || _('nordvpn_install_hint')));
+        connectText.textContent = installed ? _('nordvpn_connect') : _('nordvpn_install_required');
+        connectBtn.disabled = connected;
+        disconnectBtn.classList.toggle('hidden', !connected);
+        if (card) card.classList.toggle('tunnel-card--connected', connected);
+    }
+
+    async function connectNordvpn() {
+        const btn = document.getElementById('nordvpnConnectBtn');
+        const spinner = document.getElementById('nordvpnConnectSpinner');
+        const text = document.getElementById('nordvpnConnectBtnText');
+        btn.disabled = true;
+        spinner.classList.remove('hidden');
+        text.textContent = _('loading');
+
+        try {
+            const country = (document.getElementById('nordvpnCountry') || {}).value || '';
+            const city = (document.getElementById('nordvpnCity') || {}).value || '';
+            const status = await apiCall('/api/settings/nordvpn/connect', 'POST', {
+                country: country.trim(),
+                city: city.trim(),
+            });
+            updateNordvpnStatus(status);
+            showToast(_('nordvpn_connected'), 'success');
+        } catch (err) {
+            showToast(`${_('error')}: ` + err.message, 'error');
+            await loadTunnelStatus();
+        } finally {
+            spinner.classList.add('hidden');
+        }
+    }
+
+    async function disconnectNordvpn() {
+        const btn = document.getElementById('nordvpnDisconnectBtn');
+        const spinner = document.getElementById('nordvpnDisconnectSpinner');
+        const text = document.getElementById('nordvpnDisconnectBtnText');
+        btn.disabled = true;
+        spinner.classList.remove('hidden');
+        text.textContent = _('loading');
+
+        try {
+            const status = await apiCall('/api/settings/nordvpn/disconnect', 'POST');
+            updateNordvpnStatus(status);
+            showToast(_('nordvpn_disconnected'), 'success');
+        } catch (err) {
+            showToast(`${_('error')}: ` + err.message, 'error');
+            await loadTunnelStatus();
+        } finally {
+            btn.disabled = false;
+            text.textContent = _('nordvpn_disconnect');
+            spinner.classList.add('hidden');
+        }
+    }
+
+    async function enableTunnel(provider) {
+        const btn = document.getElementById(`${provider}TunnelBtn`);
+        const spinner = document.getElementById(`${provider}TunnelSpinner`);
+        const text = document.getElementById(`${provider}TunnelBtnText`);
+        btn.disabled = true;
+        spinner.classList.remove('hidden');
+        text.textContent = _('loading');
+
+        try {
+            const current = await apiCall('/api/settings/tunnels/status');
+            const providerStatus = current[provider] || {};
+            if (!providerStatus.installed) {
+                text.textContent = _('installing');
+                await apiCall(`/api/settings/tunnels/${provider}/install`, 'POST');
+            }
+
+            text.textContent = _('tunnel_starting');
+            const body = provider === 'ngrok' ? { authtoken: document.getElementById('ngrokAuthtoken').value.trim() } : {};
+            const status = await apiCall(`/api/settings/tunnels/${provider}/start`, 'POST', body);
+            updateTunnelProvider(provider, status);
+            showToast(status.public_url ? _('tunnel_started') : _('tunnel_waiting_url'), 'success');
+            if (!tunnelStatusTimer) tunnelStatusTimer = setInterval(loadTunnelStatus, 5000);
+        } catch (err) {
+            showToast(`${_('error')}: ` + err.message, 'error');
+            await loadTunnelStatus();
+        } finally {
+            btn.disabled = false;
+            spinner.classList.add('hidden');
+        }
+    }
+
+    async function stopTunnel(provider) {
+        const btn = document.getElementById(`${provider}StopBtn`);
+        const spinner = document.getElementById(`${provider}StopSpinner`);
+        const text = document.getElementById(`${provider}StopBtnText`);
+        btn.disabled = true;
+        spinner.classList.remove('hidden');
+        text.textContent = _('tunnel_stopping');
+
+        try {
+            const status = await apiCall(`/api/settings/tunnels/${provider}/stop`, 'POST');
+            updateTunnelProvider(provider, status);
+            showToast(_('tunnel_stopped'), 'success');
+        } catch (err) {
+            showToast(`${_('error')}: ` + err.message, 'error');
+            await loadTunnelStatus();
+        } finally {
+            btn.disabled = false;
+            text.textContent = _('tunnel_stop');
+            spinner.classList.add('hidden');
+        }
+    }
+
+    async function deleteTunnel(provider) {
+        if (!confirm(_('tunnel_delete_confirm'))) return;
+        const btn = document.getElementById(`${provider}DeleteBtn`);
+        const spinner = document.getElementById(`${provider}DeleteSpinner`);
+        const text = document.getElementById(`${provider}DeleteBtnText`);
+        btn.disabled = true;
+        spinner.classList.remove('hidden');
+        text.textContent = _('deleting');
+
+        try {
+            const status = await apiCall(`/api/settings/tunnels/${provider}`, 'DELETE');
+            updateTunnelProvider(provider, status);
+            showToast(_('tunnel_deleted'), 'success');
+        } catch (err) {
+            showToast(`${_('error')}: ` + err.message, 'error');
+            await loadTunnelStatus();
+        } finally {
+            btn.disabled = false;
+            text.textContent = _('tunnel_delete');
+            spinner.classList.add('hidden');
+        }
+    }
+
+    async function syncRemnawaveNow() {
+        const btn = document.getElementById('syncNowBtn');
+        const text = document.getElementById('syncNowBtnText');
+        const spinner = document.getElementById('syncNowSpinner');
+
+        btn.disabled = true;
+        text.textContent = _('sync_running');
+        spinner.classList.remove('hidden');
+
+        try {
+            const res = await fetch('/api/settings/sync_now', { method: 'POST' });
+            const data = await res.json();
+            if (data.status === 'success') {
+                showToast(_('sync_success').replace('{}', data.count), 'success');
+                setTimeout(() => window.location.reload(), 1500);
+            } else {
+                throw new Error(data.message || 'Error occurred');
+            }
+        } catch (err) {
+            showToast(`${_('error')}: ` + err.message, 'error');
+        } finally {
+            btn.disabled = false;
+            text.textContent = `🔄 ${_('sync_now_btn')}`;
+            spinner.classList.add('hidden');
+        }
+    }
+
+    async function deleteSyncRemnawave() {
+        if (!confirm(_('delete_sync_confirm'))) return;
+
+        const btn = document.getElementById('syncDelBtn');
+        const text = document.getElementById('syncDelBtnText');
+        const spinner = document.getElementById('syncDelSpinner');
+
+        btn.disabled = true;
+        text.textContent = _('deleting');
+        spinner.classList.remove('hidden');
+
+        try {
+            const res = await fetch('/api/settings/sync_delete', { method: 'POST' });
+            const data = await res.json();
+            if (data.status === 'success') {
+                showToast(_('sync_deleted').replace('{}', data.count), 'success');
+                setTimeout(() => window.location.reload(), 1500);
+            }
+        } catch (err) {
+            showToast(`${_('error')}: ` + err.message, 'error');
+        } finally {
+            btn.disabled = false;
+            text.innerHTML = `${uiIcon('trash')} ${_('delete_sync_btn')}`;
+            spinner.classList.add('hidden');
+        }
+    }
+
+    async function syncXuiNow() {
+        const btn = document.getElementById('xuiSyncNowBtn');
+        const text = document.getElementById('xuiSyncNowBtnText');
+        const spinner = document.getElementById('xuiSyncNowSpinner');
+        const syncForm = document.getElementById('syncForm');
+
+        btn.disabled = true;
+        text.textContent = _('sync_running');
+        spinner.classList.remove('hidden');
+
+        try {
+            const payload = {
+                xui_sync: true,
+                xui_sync_users: true,
+                xui_url: syncForm.xui_url.value.trim(),
+                xui_username: syncForm.xui_username.value.trim(),
+                xui_password: syncForm.xui_password.value,
+                xui_api_token: syncForm.xui_api_token.value.trim(),
+                xui_create_conns: syncForm.xui_create_conns.checked,
+                xui_server_id: parseInt(syncForm.xui_server_id.value || '0'),
+                xui_protocol: syncForm.xui_protocol.value,
+                xui_inbound_id: parseInt(syncForm.xui_inbound_id.value || '0'),
+                xui_sub_url: (syncForm.xui_sub_url && syncForm.xui_sub_url.value || '').trim()
+            };
+            const res = await fetch('/api/settings/xui_sync_now', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const data = await res.json();
+            if (data.status === 'success') {
+                showToast(_('sync_success').replace('{}', data.count), 'success');
+                setTimeout(() => window.location.reload(), 1500);
+            } else {
+                throw new Error(data.message || data.error || 'Error occurred');
+            }
+        } catch (err) {
+            showToast(`${_('error')}: ` + err.message, 'error');
+        } finally {
+            btn.disabled = false;
+            text.textContent = `🔄 ${_('sync_now_btn')}`;
+            spinner.classList.add('hidden');
+        }
+    }
+
+    async function deleteSyncXui() {
+        if (!confirm(_('delete_sync_confirm'))) return;
+
+        const btn = document.getElementById('xuiSyncDelBtn');
+        const text = document.getElementById('xuiSyncDelBtnText');
+        const spinner = document.getElementById('xuiSyncDelSpinner');
+
+        btn.disabled = true;
+        text.textContent = _('deleting');
+        spinner.classList.remove('hidden');
+
+        try {
+            const res = await fetch('/api/settings/xui_sync_delete', { method: 'POST' });
+            const data = await res.json();
+            if (data.status === 'success') {
+                showToast(_('sync_deleted').replace('{}', data.count), 'success');
+                setTimeout(() => window.location.reload(), 1500);
+            }
+        } catch (err) {
+            showToast(`${_('error')}: ` + err.message, 'error');
+        } finally {
+            btn.disabled = false;
+            text.innerHTML = `${uiIcon('trash')} ${_('delete_sync_btn')}`;
+            spinner.classList.add('hidden');
+        }
+    }
+
+    async function saveSettings() {
+        const btn = document.getElementById('saveBtn');
+        const spinner = document.getElementById('saveSpinner');
+        btn.disabled = true;
+        spinner.classList.remove('hidden');
+
+        const appForm = document.getElementById('appearanceForm');
+        const syncForm = document.getElementById('syncForm');
+
+        const appearance = {
+            title: appForm.title.value,
+            logo: appForm.logo.value,
+            subtitle: appForm.subtitle.value
+        };
+
+        const sync = {
+            remnawave_url: syncForm.remnawave_url.value,
+            remnawave_api_key: syncForm.remnawave_api_key.value,
+            remnawave_sync: syncForm.remnawave_sync.checked,
+            remnawave_sync_users: syncForm.remnawave_sync_users.checked,
+            remnawave_create_conns: syncForm.remnawave_create_conns.checked,
+            remnawave_server_id: parseInt(syncForm.remnawave_server_id.value || '0'),
+            remnawave_protocol: syncForm.remnawave_protocol.value,
+            xui_sync: syncForm.xui_sync.checked,
+            xui_url: syncForm.xui_url.value,
+            xui_username: syncForm.xui_username.value,
+            xui_password: syncForm.xui_password.value,
+            xui_api_token: syncForm.xui_api_token.value,
+            xui_sync_users: syncForm.xui_sync_users.checked,
+            xui_create_conns: syncForm.xui_create_conns.checked,
+            xui_server_id: parseInt(syncForm.xui_server_id.value || '0'),
+            xui_protocol: syncForm.xui_protocol.value,
+            xui_inbound_id: parseInt(syncForm.xui_inbound_id.value || '0'),
+            xui_sub_url: (syncForm.xui_sub_url && syncForm.xui_sub_url.value || '').trim()
+        };
+
+
+        const captcha = {
+            enabled: document.getElementById('captcha_enabled').checked
+        };
+
+        const telegram = {
+            token: document.getElementById('tg_token').value.trim(),
+            enabled: botCurrentlyRunning
+        };
+
+        const ssl = {
+            enabled: document.getElementById('ssl_enabled').checked,
+            domain: document.getElementById('ssl_domain').value.trim(),
+            cert_path: document.getElementById('ssl_cert_path').value.trim(),
+            key_path: document.getElementById('ssl_key_path').value.trim(),
+            cert_text: document.getElementById('ssl_cert_text').value.trim(),
+            key_text: document.getElementById('ssl_key_text').value.trim(),
+            panel_port: parseInt(document.getElementById('panel_port').value || '5000')
+        };
+
+        let createProtocol = 'xui';
+        let createServerId = 0;
+        const guestServerVal = document.getElementById('guest_create_server')?.value || 'xui';
+        const guestProtoVal = document.getElementById('guest_create_protocol')?.value || '';
+        if (guestServerVal === 'xui' || guestProtoVal === 'xui') {
+            createProtocol = 'xui';
+            createServerId = 0;
+        } else {
+            createProtocol = guestProtoVal;
+            createServerId = parseInt(guestServerVal || '0', 10) || 0;
+        }
+
+        const guest = {
+            enabled: document.getElementById('guest_enabled').checked,
+            token: document.getElementById('guest_token').value || '',
+            password: document.getElementById('guest_password').value || '',
+            clear_password: !!(document.getElementById('guest_clear_password') && document.getElementById('guest_clear_password').checked),
+            user_id: document.getElementById('guest_user_id').value || '',
+            allow_create: document.getElementById('guest_allow_create').checked,
+            create_protocol: createProtocol,
+            create_server_id: createServerId,
+            create_inbound_id: parseInt(document.getElementById('guest_create_inbound_id').value || '0'),
+            create_xui_panel_id: document.getElementById('guest_create_xui_panel')?.value || '',
+            create_allow_server_choice: !!(document.getElementById('guest_allow_server_choice') && document.getElementById('guest_allow_server_choice').checked),
+        };
+
+        const donateMethod = (key) => ({
+            enabled: document.getElementById(`donate_${key}_enabled`).checked,
+            title: document.getElementById(`donate_${key}_title`).value.trim(),
+            details: document.getElementById(`donate_${key}_details`).value.trim(),
+        });
+        const donate = {
+            enabled: document.getElementById('donate_enabled').checked,
+            intro: document.getElementById('donate_intro').value.trim(),
+            sbp: donateMethod('sbp'),
+            card: donateMethod('card'),
+            crypto: donateMethod('crypto'),
+        };
+
+        try {
+            const res = await fetch('/api/settings/save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ appearance, sync, captcha, telegram, ssl, guest, donate })
+            });
+            if (!res.ok) throw new Error(_('error'));
+            showToast(_('settings_saved'), 'success');
+            setTimeout(() => window.location.reload(), 1000);
+        } catch (err) {
+            showToast(err.message, 'error');
+        } finally {
+            btn.disabled = false;
+            spinner.classList.add('hidden');
+        }
+    }
+
+    const guestServersData = {{ servers | default([]) | tojson }};
+    const VPN_PROTO_ORDER = ['awg3', 'awg2', 'awg', 'awg_legacy', 'wireguard', 'xray', 'telemt', 'hysteria', 'naiveproxy', 'mieru'];
+    const PROTO_TITLES = {
+        awg3: 'AmneziaWG 3.1',
+        awg2: 'AmneziaWG 2.0',
+        awg: 'AmneziaWG',
+        awg_legacy: 'AWG Legacy',
+        wireguard: 'WireGuard',
+        xray: 'Xray (VLESS-XHTTP-TLS)',
+        telemt: 'Telemt',
+        hysteria: 'Hysteria 2',
+        naiveproxy: 'NaiveProxy',
+        mieru: 'Mieru',
+        aivpn: 'AIVPN (auto)',
+        xui: '3x-ui VLESS',
+    };
+    function protoTitle(key) {
+        const raw = String(key || '');
+        const base = raw.split('__')[0];
+        const title = PROTO_TITLES[base] || base.toUpperCase();
+        const m = raw.match(/__(\d+)$/);
+        return m ? `${title} #${m[1]}` : title;
+    }
+
+    function fillGuestProtocols() {
+        const serverSel = document.getElementById('guest_create_server');
+        const protoSel = document.getElementById('guest_create_protocol');
+        if (!serverSel || !protoSel) return;
+        const prefer = document.getElementById('guest_create_protocol_pref')?.value || protoSel.value || '';
+        const serverVal = serverSel.value;
+        protoSel.innerHTML = '';
+        if (serverVal === 'xui') {
+            const opt = document.createElement('option');
+            opt.value = 'xui';
+            opt.textContent = PROTO_TITLES.xui;
+            protoSel.appendChild(opt);
+            updateGuestCreateFields();
+            return;
+        }
+        const server = guestServersData[parseInt(serverVal, 10)];
+        const protocols = (server && server.protocols) || {};
+        const installed = Object.keys(protocols).filter(k => {
+            const info = protocols[k] || {};
+            return !!info.installed && VPN_PROTO_ORDER.includes(k.split('__')[0]);
+        }).sort((a, b) => {
+            const ia = VPN_PROTO_ORDER.indexOf(a.split('__')[0]);
+            const ib = VPN_PROTO_ORDER.indexOf(b.split('__')[0]);
+            return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b);
+        });
+        if (!installed.length) {
+            const opt = document.createElement('option');
+            opt.value = '';
+            opt.disabled = true;
+            opt.textContent = _('no_protocols');
+            protoSel.appendChild(opt);
+        } else {
+            const aivpnOpt = document.createElement('option');
+            aivpnOpt.value = 'aivpn';
+            aivpnOpt.textContent = _('aivpn_protocol_option') || 'AIVPN (auto)';
+            if (prefer === 'aivpn') aivpnOpt.selected = true;
+            protoSel.appendChild(aivpnOpt);
+
+            installed.forEach(key => {
+                const opt = document.createElement('option');
+                opt.value = key;
+                opt.textContent = protoTitle(key);
+                if (prefer && prefer === key) opt.selected = true;
+                protoSel.appendChild(opt);
+            });
+        }
+        updateGuestCreateFields();
+    }
+
+    function updateGuestCreateFields() {
+        const v = document.getElementById('guest_create_protocol')?.value;
+        const group = document.getElementById('guestInboundGroup');
+        if (group) group.style.display = (v === 'xui') ? 'block' : 'none';
+        if (v === 'xui') loadGuestInbounds();
+    }
+
+    fillGuestProtocols();
+    if (document.getElementById('guest_create_protocol')?.value === 'xui') {
+        loadGuestInbounds();
+    }
+
+    function copyGuestLink() {
+        const el = document.getElementById('guest_link_display');
+        if (el && el.value) copyToClipboard(el.value);
+    }
+
+    async function regenGuestToken() {
+        if (!confirm(_('guest_regen_confirm'))) return;
+        try {
+            const res = await fetch('/api/settings/guest/regenerate_token', { method: 'POST' });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || _('error'));
+            document.getElementById('guest_token').value = data.token;
+            const link = `${window.location.origin}/guest/${data.token}`;
+            document.getElementById('guest_link_display').value = link;
+            showToast(_('guest_token_updated'), 'success');
+        } catch (err) {
+            showToast(`${_('error')}: ` + err.message, 'error');
+        }
+    }
+
+    async function toggleBot() {
+        const btn = document.getElementById('toggleBotBtn');
+        const text = document.getElementById('toggleBotBtnText');
+        const spinner = document.getElementById('toggleBotSpinner');
+        btn.disabled = true;
+        spinner.classList.remove('hidden');
+        try {
+            const res = await fetch('/api/settings/telegram/toggle', { method: 'POST' });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || _('error'));
+            const running = data.bot_running;
+            document.getElementById('botStatusBadge').className = running ? 'badge badge-success' : 'badge badge-secondary';
+            document.getElementById('botStatusBadge').textContent = running ? _('bot_running') : _('bot_stopped');
+            text.textContent = running ? _('bot_stop_btn') : _('bot_start_btn');
+            showToast(running ? _('bot_started') : _('bot_stopped_msg'), 'success');
+        } catch (err) {
+            showToast(`${_('error')}: ` + err.message, 'error');
+        } finally {
+            btn.disabled = false;
+            spinner.classList.add('hidden');
+        }
+    }
+
+    async function handleRestore(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const nameEl = document.getElementById('backupFileName');
+        if (nameEl) nameEl.textContent = file.name;
+
+        if (!confirm(_('restore_confirm'))) {
+            e.target.value = '';
+            if (nameEl) nameEl.textContent = '';
+            return;
+        }
+
+        const btn = document.getElementById('restoreBtn');
+        btn.disabled = true;
+        const originalText = btn.innerHTML;
+        btn.innerHTML = `<div class="spinner" style="width:14px; height:14px;"></div> ${_('importing_backup')}`;
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        try {
+            const res = await fetch('/api/settings/backup/import', {
+                method: 'POST',
+                body: formData,
+                credentials: 'same-origin',
+            });
+            let data = {};
+            try {
+                data = await res.json();
+            } catch (_) {
+                data = {};
+            }
+            if (res.ok && data.status === 'success') {
+                showToast(_('restore_success'), 'success');
+                setTimeout(() => window.location.reload(), 2000);
+            } else {
+                showToast(data.error || _('invalid_backup_file') + ` (HTTP ${res.status})`, 'error');
+            }
+        } catch (err) {
+            showToast(`${_('error')}: ` + err.message, 'error');
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = originalText;
+            e.target.value = '';
+        }
+    }
+
+    // Init protocols on load
+    if (document.getElementById('syncCreateConns').checked) {
+        updateProtocolsForSync();
+    }
+
+    let latestUpdateInfo = null;
+
+    async function checkForUpdates(silent) {
+        const btn = document.getElementById('checkUpdateBtn');
+        const text = document.getElementById('checkUpdateBtnText');
+        const spinner = document.getElementById('checkUpdateSpinner');
+        const statusDiv = document.getElementById('updateStatus');
+        const downloadBtn = document.getElementById('downloadUpdateBtn');
+        const applyBtn = document.getElementById('applyUpdateBtn');
+        const modeHint = document.getElementById('updateModeHint');
+
+        if (!silent) {
+            btn.disabled = true;
+            text.textContent = "{{ _('checking_updates')|default('Checking...') }}";
+            spinner.classList.remove('hidden');
+        }
+        statusDiv.classList.add('hidden');
+        downloadBtn.classList.add('hidden');
+        applyBtn.classList.add('hidden');
+
+        try {
+            const data = await apiCall('/api/settings/check_updates');
+            latestUpdateInfo = data;
+            const latestVersion = data.latest_version || '';
+            statusDiv.classList.remove('hidden');
+
+            if (modeHint) {
+                const method = data.update_mode || (data.mode && data.mode.update_method) || (data.mode && data.mode.mode) || '';
+                if (!data.can_auto_update) {
+                    if (method === 'docker') {
+                        modeHint.textContent = "{{ _('auto_update_docker')|default('Docker: on the host run git pull && docker compose up -d --build.') }}";
+                    } else {
+                        modeHint.textContent = "{{ _('auto_update_manual')|default('One-click update needs a writable install directory or git clone.') }}";
+                    }
+                } else if (method === 'archive') {
+                    modeHint.textContent = "{{ _('auto_update_archive')|default('One-click update downloads the release ZIP from git.de4ima.uk and restarts the panel.') }}";
+                } else {
+                    modeHint.textContent = "{{ _('auto_update_ready')|default('Git auto-update is available for this install.') }}";
+                }
+            }
+
+            const upgradeBtn = document.getElementById('upgradePanelBtn');
+            if (upgradeBtn) {
+                upgradeBtn.disabled = false;
+                upgradeBtn.title = data.can_auto_update ? '' : (modeHint ? modeHint.textContent : '');
+            }
+
+            if (data.update_available && latestVersion) {
+                statusDiv.innerHTML = `<span style="color: var(--success); font-weight: bold;">{{ _('update_available')|default('Update available') }}: ${latestVersion}</span>`;
+                statusDiv.style.border = '1px solid var(--success)';
+                downloadBtn.href = data.html_url || data.releases_url || 'https://git.de4ima.uk/Evilfox/Amnezia-Web-Panel-main/releases';
+                downloadBtn.classList.remove('hidden');
+                applyBtn.classList.remove('hidden');
+            } else {
+                statusDiv.innerHTML = `<span style="color: var(--text-muted);">{{ _('up_to_date')|default('Up to date') }}</span>`;
+                statusDiv.style.border = '1px solid var(--border-color)';
+            }
+        } catch (err) {
+            if (!silent) showToast('Failed to check for updates: ' + err.message, 'error');
+        } finally {
+            if (!silent) {
+                btn.disabled = false;
+                text.textContent = "🔄 {{ _('check_updates')|default('Check for updates') }}";
+                spinner.classList.add('hidden');
+            }
+        }
+    }
+
+    async function waitForPanelRestart(timeoutMs = 120000, panelUrl) {
+        const base = String(panelUrl || window.location.origin || '').replace(/\/$/, '');
+        const started = Date.now();
+        while (Date.now() - started < timeoutMs) {
+            try {
+                const res = await fetch(`${base}/api/health`, { cache: 'no-store' });
+                if (res.ok) {
+                    window.location.href = base + '/';
+                    return true;
+                }
+            } catch (_) {}
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+        }
+        const hint = base ? ` ${base}` : '';
+        showToast("{{ _('update_restart_timeout')|default('Panel did not come back in time. Refresh the page manually.') }}" + hint, 'error');
+        return false;
+    }
+
+    async function applyPanelUpdate() {
+        const applyBtn = document.getElementById('applyUpdateBtn');
+        const applyText = document.getElementById('applyUpdateBtnText');
+        const applySpinner = document.getElementById('applyUpdateSpinner');
+        const target = (latestUpdateInfo && latestUpdateInfo.latest_version) || '';
+        if (!target) {
+            showToast("{{ _('update_no_target')|default('No target version. Check for updates first.') }}", 'error');
+            return;
+        }
+        if (!confirm("{{ _('apply_update_confirm')|default('Install update from git.de4ima.uk and restart the panel?') }} " + target)) {
+            return;
+        }
+        applyBtn.disabled = true;
+        applyText.textContent = "{{ _('applying_update')|default('Updating…') }}";
+        applySpinner.classList.remove('hidden');
+        let restarting = false;
+        try {
+            const data = await apiCall('/api/settings/apply_update', 'POST', {
+                target_version: target,
+                allow_dirty: true,
+            });
+            showToast(data.message || "{{ _('update_restarting')|default('Updated. Restarting…') }}", 'success');
+            restarting = true;
+            applyText.textContent = "{{ _('update_waiting_restart')|default('Waiting for panel…') }}";
+            await waitForPanelRestart(120000, data.panel_url);
+        } catch (err) {
+            showToast(_('error') + ': ' + err.message, 'error');
+        } finally {
+            if (!restarting) {
+                applyBtn.disabled = false;
+                applyText.textContent = "⬆ {{ _('apply_update')|default('Install update') }}";
+                applySpinner.classList.add('hidden');
+            }
+        }
+    }
+
+    async function upgradePanel() {
+        const btn = document.getElementById('upgradePanelBtn');
+        const text = document.getElementById('upgradePanelBtnText');
+        const spinner = document.getElementById('upgradePanelSpinner');
+        const latest = (latestUpdateInfo && latestUpdateInfo.latest_version) || '';
+        const confirmMsg = latest
+            ? ("{{ _('upgrade_panel_confirm')|default('Download and install') }} " + latest + "?")
+            : "{{ _('upgrade_panel_confirm_latest')|default('Check for updates and install the latest release?') }}";
+        if (!confirm(confirmMsg)) return;
+
+        btn.disabled = true;
+        spinner.classList.remove('hidden');
+        text.textContent = "{{ _('upgrade_panel_working')|default('Updating panel…') }}";
+        let restarting = false;
+        try {
+            const data = await apiCall('/api/settings/upgrade_panel', 'POST', {});
+            if (data.up_to_date) {
+                showToast("{{ _('upgrade_panel_up_to_date')|default('Already on the latest version') }}", 'info');
+                await checkForUpdates(true);
+                return;
+            }
+            showToast(data.message || "{{ _('update_restarting')|default('Updated. Restarting…') }}", 'success');
+            restarting = true;
+            text.textContent = "{{ _('update_waiting_restart')|default('Waiting for panel…') }}";
+            await waitForPanelRestart(120000, data.panel_url);
+        } catch (err) {
+            showToast(_('error') + ': ' + err.message, 'error');
+            await checkForUpdates(true);
+        } finally {
+            if (!restarting) {
+                btn.disabled = false;
+                spinner.classList.add('hidden');
+                text.textContent = "⬆ {{ _('upgrade_panel')|default('Update panel') }}";
+            }
+        }
+    }
+
+    // Auto-check once on Settings load
+    setTimeout(() => checkForUpdates(true), 800);
+
+    /* ========== API Tokens ========== */
+
+    function fmtTokenDate(iso) {
+        if (!iso) return _('api_tokens_never');
+        const d = new Date(iso);
+        return isNaN(d) ? iso : d.toLocaleString();
+    }
+
+    async function loadTokens() {
+        try {
+            const data = await apiCall('/api/settings/tokens');
+            renderTokens(data.tokens || []);
+        } catch (err) {
+            showToast(err.message, 'error');
+        }
+    }
+
+    function renderTokens(tokens) {
+        const container = document.getElementById('tokensList');
+        if (!container) return;
+        if (!tokens.length) {
+            container.innerHTML = `<div class="form-hint" id="tokensEmptyState">${_('api_tokens_empty')}</div>`;
+            return;
+        }
+        container.innerHTML = tokens.map(t => `
+            <div class="token-row" style="display:flex; align-items:center; justify-content:space-between; gap:var(--space-md); padding:var(--space-sm) 0; border-bottom:1px solid var(--border-color);">
+                <div style="min-width:0; flex:1;">
+                    <div style="font-weight:600;">${escapeHTML(t.name)}</div>
+                    <div class="text-muted" style="font-size:0.78rem; font-family: 'SF Mono', monospace;">
+                        <span>${escapeHTML(t.token_prefix || '')}…</span>
+                        <span style="margin-left:var(--space-md);">${_('api_tokens_created')}: ${fmtTokenDate(t.created_at)}</span>
+                        <span style="margin-left:var(--space-md);">${_('api_tokens_last_used')}: ${fmtTokenDate(t.last_used_at)}</span>
+                        ${t.owner ? `<span style="margin-left:var(--space-md);">${_('api_tokens_owner')}: ${escapeHTML(t.owner)}</span>` : ''}
+                    </div>
+                </div>
+                <button class="btn btn-danger btn-sm" onclick="revokeToken('${t.id}', '${escapeHTML(t.name)}')">
+                    ${_('api_tokens_revoke')}
+                </button>
+            </div>
+        `).join('');
+    }
+
+    function escapeHTML(s) {
+        return String(s ?? '').replace(/[&<>"']/g, c => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+        }[c]));
+    }
+
+    function openCreateTokenModal() {
+        document.getElementById('createTokenName').value = '';
+        document.getElementById('createTokenError').textContent = '';
+        openModal('createTokenModal');
+        setTimeout(() => document.getElementById('createTokenName').focus(), 50);
+    }
+
+    async function submitCreateToken() {
+        const name = document.getElementById('createTokenName').value.trim();
+        const errEl = document.getElementById('createTokenError');
+        if (!name) {
+            errEl.textContent = _('api_tokens_name_required');
+            return;
+        }
+        const btn = document.getElementById('createTokenBtn');
+        btn.disabled = true;
+        try {
+            const res = await apiCall('/api/settings/tokens', 'POST', { name });
+            closeModal('createTokenModal');
+            // Show the raw token exactly once. The user must copy it now —
+            // we cannot retrieve it after this point.
+            document.getElementById('newTokenValue').value = res.token || '';
+            document.getElementById('newTokenName').textContent = res.name || '';
+            openModal('newTokenModal');
+            loadTokens();
+        } catch (err) {
+            errEl.textContent = err.message;
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    function copyNewToken() {
+        const input = document.getElementById('newTokenValue');
+        input.select();
+        copyToClipboard(input.value);
+    }
+
+    async function revokeToken(id, name) {
+        if (!confirm(_('api_tokens_revoke_confirm').replace('{}', name))) return;
+        try {
+            await apiCall(`/api/settings/tokens/${id}`, 'DELETE');
+            showToast(_('api_tokens_revoked'), 'success');
+            loadTokens();
+        } catch (err) {
+            showToast(err.message, 'error');
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        loadTokens();
+        loadTunnelStatus();
+        tunnelStatusTimer = setInterval(loadTunnelStatus, 10000);
+    });
+</script>
+{% endblock %}

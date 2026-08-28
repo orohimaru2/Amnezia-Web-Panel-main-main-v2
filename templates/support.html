@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% from "macros/icons.html" import icon %}
+
+{% block title_extra %} — {{ _('nav_support') }}{% endblock %}
+
+{% block head_extra %}
+<style>
+    .support-hero {
+        text-align: center;
+        padding: var(--space-xl) var(--space-md);
+        margin-bottom: var(--space-xl);
+    }
+    .support-hero-icon {
+        font-size: 2.5rem;
+        margin-bottom: var(--space-md);
+        color: var(--accent);
+    }
+    .support-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        gap: var(--space-lg);
+        max-width: 960px;
+        margin: 0 auto;
+    }
+    .support-card {
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-lg);
+        padding: var(--space-lg);
+        background: var(--bg-secondary);
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-md);
+    }
+    .support-card-title {
+        font-weight: 700;
+        font-size: 1.05rem;
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm);
+    }
+    .support-details {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 0.85rem;
+        white-space: pre-wrap;
+        word-break: break-word;
+        padding: var(--space-sm);
+        border-radius: var(--radius-md);
+        background: var(--bg-primary);
+        border: 1px dashed var(--border-color);
+        min-height: 4rem;
+        color: var(--text-muted);
+    }
+    .support-details.has-content {
+        color: var(--text-primary);
+        border-style: solid;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<section class="support-hero">
+    <div class="support-hero-icon">{{ icon('heart') }}</div>
+    <h1 class="section-title" style="justify-content: center; margin-bottom: var(--space-sm);">
+        {{ _('support_title') }}
+    </h1>
+    <p class="text-muted" style="max-width: 560px; margin: 0 auto; line-height: 1.5;">
+        {% if donate.get('intro') %}
+        {{ donate.intro }}
+        {% else %}
+        {{ _('support_intro') }}
+        {% endif %}
+    </p>
+</section>
+
+<div class="support-grid">
+    {% set methods = [
+        ('sbp', _('donate_sbp'), '💳'),
+        ('card', _('donate_card'), '🏦'),
+        ('crypto', _('donate_crypto'), '₿'),
+    ] %}
+    {% for key, default_title, emoji in methods %}
+    {% set method = donate.get(key) or {} %}
+    {% if method.get('enabled', True) %}
+    <div class="card support-card">
+        <div class="support-card-title">
+            <span aria-hidden="true">{{ emoji }}</span>
+            <span>{{ method.get('title') or default_title }}</span>
+        </div>
+        {% set details = (method.get('details') or '').strip() %}
+        <div class="support-details{% if details %} has-content{% endif %}" id="donate-{{ key }}-details">{{ details or _('donate_details_soon') }}</div>
+        {% if details %}
+        <button type="button" class="btn btn-secondary btn-sm" onclick="copyToClipboard(document.getElementById('donate-{{ key }}-details').textContent)">
+            {{ icon('copy') }} {{ _('copy') }}
+        </button>
+        {% endif %}
+    </div>
+    {% endif %}
+    {% endfor %}
+</div>
+
+<p class="text-muted text-sm" style="text-align: center; margin-top: var(--space-xl); max-width: 520px; margin-left: auto; margin-right: auto;">
+    {{ _('support_footer') }}
+</p>
+{% endblock %}

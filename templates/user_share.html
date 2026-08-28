@@ -1,0 +1,439 @@
+{% extends "base.html" %}
+{% from "macros/icons.html" import icon %}
+
+{% block title_extra %} — {{ _('share_title') }}{% endblock %}
+
+{% block content %}
+<div class="share-page">
+    <header class="share-hero">
+        <h1 class="share-title">{{ _('vpn_access') }}</h1>
+        <p class="share-user">{{ _('user_label_share') }}: <strong>{{ share_user.username }}</strong></p>
+        {% if not need_password %}
+        <p class="share-hint">{{ _('share_copy_hint') }}</p>
+        {% endif %}
+    </header>
+
+    {% if need_password %}
+    <div class="share-auth card">
+        <div class="share-auth-icon">{{ icon('lock') }}</div>
+        <p>{{ _('share_protected_desc') }}</p>
+        <form id="authForm" onsubmit="authShare(event)" class="share-auth-form">
+            <input type="password" id="sharePassword" class="form-input" placeholder="{{ _('password') }}" required autofocus>
+            <button type="submit" class="btn btn-primary share-btn-lg" id="authBtn">
+                <span id="authBtnText">{{ _('login') }}</span>
+                <div class="spinner hidden" id="authSpinner"></div>
+            </button>
+        </form>
+    </div>
+    {% else %}
+    <div id="connectionsList">
+        <div class="share-loading" id="loadingState">
+            <div class="spinner share-spinner"></div>
+            <p>{{ _('loading_share_conns') }}</p>
+        </div>
+        <div id="connectionsGrid" class="share-grid hidden"></div>
+        <div id="emptyState" class="share-empty hidden">
+            <p>{{ _('no_active_conns') }}</p>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<div class="modal-backdrop" id="configModal">
+    <div class="modal share-modal">
+        <div class="modal-header">
+            <h2 class="modal-title" id="configModalTitle">{{ _('config') }}</h2>
+            <button class="modal-close" onclick="closeModal('configModal')" type="button">&times;</button>
+        </div>
+
+        <div class="share-modal-body">
+            <button type="button" class="btn btn-primary share-btn-lg" id="modalCopyBtn" onclick="copyCurrentKey()">
+                {{ icon('copy') }}
+                <span>{{ _('copy_key_big') }}</span>
+            </button>
+
+            <div class="share-qr-wrap">
+                <div id="qrcode"></div>
+                <p class="share-qr-caption">{{ _('qr_code_tab') }}</p>
+            </div>
+
+            <div class="share-extra">
+                <button type="button" class="btn btn-secondary w-full" id="downloadBtn">
+                    {{ _('download_config_file') }}
+                </button>
+                <button type="button" class="share-link-btn" onclick="toggleConfigText()">
+                    {{ _('show_config_text') }}
+                </button>
+                <textarea class="config-text share-config-text hidden" id="configText" readonly rows="8"></textarea>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const TOKEN = "{{ token }}";
+    let currentConfig = '';
+    let currentVpnLink = '';
+    let currentName = '';
+
+    function escAttr(s) {
+        return String(s || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    }
+
+    function escHtml(s) {
+        return String(s || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    function pickKey(config, vpnLink) {
+        const link = (vpnLink || '').trim();
+        if (link) return link;
+        return (config || '').trim();
+    }
+
+    async function copyKeyText(text) {
+        if (!text) throw new Error(_('error'));
+        try {
+            await navigator.clipboard.writeText(text);
+        } catch {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            ta.remove();
+        }
+        showToast(_('key_copied'), 'success');
+    }
+
+    async function fetchShareConfig(connId) {
+        const res = await fetch(`/api/share/${TOKEN}/config/${connId}`, { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok || data.error) throw new Error(data.error || _('error'));
+        return data;
+    }
+
+    async function authShare(e) {
+        e.preventDefault();
+        const password = document.getElementById('sharePassword').value;
+        const btn = document.getElementById('authBtn');
+        const text = document.getElementById('authBtnText');
+        const spinner = document.getElementById('authSpinner');
+        btn.disabled = true;
+        text.classList.add('hidden');
+        spinner.classList.remove('hidden');
+        try {
+            const res = await fetch(`/api/share/${TOKEN}/auth`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ password })
+            });
+            const data = await res.json();
+            if (data.status === 'success') {
+                window.location.reload();
+            } else {
+                alert(data.error || _('login_error'));
+            }
+        } catch (err) {
+            alert(`${_('error')}: ` + err.message);
+        } finally {
+            btn.disabled = false;
+            text.classList.remove('hidden');
+            spinner.classList.add('hidden');
+        }
+    }
+
+    async function loadConnections() {
+        if (!document.getElementById('loadingState')) return;
+        try {
+            const res = await fetch(`/api/share/${TOKEN}/connections`);
+            if (res.status === 401) return;
+            const data = await res.json();
+            document.getElementById('loadingState').classList.add('hidden');
+
+            if (!data.connections || data.connections.length === 0) {
+                document.getElementById('emptyState').classList.remove('hidden');
+                return;
+            }
+
+            const grid = document.getElementById('connectionsGrid');
+            grid.classList.remove('hidden');
+            grid.innerHTML = data.connections.map(c => `
+                <article class="share-card" data-conn-id="${escHtml(c.id)}">
+                    <div class="share-card-top">
+                        <div>
+                            <div class="share-card-name">${escHtml(c.name)}</div>
+                            <div class="share-card-meta">${escHtml((c.protocol || '').toUpperCase())} · ${escHtml(c.server_name || '')}</div>
+                        </div>
+                        <span class="badge badge-success share-badge">${_('active')}</span>
+                    </div>
+                    <button type="button" class="btn btn-primary share-btn-lg share-copy-btn"
+                        onclick="copyKeyFromCard(this, '${escAttr(c.id)}')">
+                        ${uiIcon('copy')}
+                        <span class="share-copy-label">${_('copy_key_big')}</span>
+                    </button>
+                    <button type="button" class="share-link-btn"
+                        onclick="showDetails('${escAttr(c.id)}', '${escAttr(c.name)}')">
+                        ${_('more_qr_download')}
+                    </button>
+                </article>
+            `).join('');
+        } catch (err) {
+            console.error(err);
+        }
+    }
+
+    async function copyKeyFromCard(btn, connId) {
+        const label = btn.querySelector('.share-copy-label');
+        const prev = label ? label.textContent : '';
+        btn.disabled = true;
+        if (label) label.textContent = _('copying_key');
+        try {
+            const data = await fetchShareConfig(connId);
+            await copyKeyText(pickKey(data.config, data.vpn_link));
+        } catch (err) {
+            alert(`${_('error')}: ` + err.message);
+        } finally {
+            btn.disabled = false;
+            if (label) label.textContent = prev || _('copy_key_big');
+        }
+    }
+
+    function fillModal(name, config, vpnLink) {
+        currentConfig = config || '';
+        currentVpnLink = vpnLink || '';
+        currentName = name || '';
+        document.getElementById('configModalTitle').textContent = name;
+        document.getElementById('configText').value = currentConfig;
+        document.getElementById('configText').classList.add('hidden');
+        const dl = document.getElementById('downloadBtn');
+        dl.onclick = () => downloadFile(currentConfig, `${name || 'vpn'}.conf`);
+        const qrContainer = document.getElementById('qrcode');
+        qrContainer.innerHTML = '';
+        const qrPayload = pickKey(currentConfig, currentVpnLink) || currentConfig;
+        if (qrPayload && typeof QRCode !== 'undefined') {
+            new QRCode(qrContainer, {
+                text: qrPayload,
+                width: 220,
+                height: 220,
+                colorDark: '#000000',
+                colorLight: '#ffffff',
+                correctLevel: QRCode.CorrectLevel.L
+            });
+        }
+    }
+
+    async function showDetails(connId, name) {
+        try {
+            const data = await fetchShareConfig(connId);
+            fillModal(name, data.config, data.vpn_link || '');
+            openModal('configModal');
+        } catch (err) {
+            alert(`${_('error')}: ` + err.message);
+        }
+    }
+
+    async function copyCurrentKey() {
+        try {
+            await copyKeyText(pickKey(currentConfig, currentVpnLink));
+        } catch (err) {
+            alert(`${_('error')}: ` + err.message);
+        }
+    }
+
+    function toggleConfigText() {
+        document.getElementById('configText').classList.toggle('hidden');
+    }
+
+    document.addEventListener('DOMContentLoaded', loadConnections);
+</script>
+
+<style>
+    .share-page {
+        max-width: 440px;
+        margin: 1.25rem auto 2.5rem;
+        padding: 0 var(--space-md);
+    }
+    .share-hero {
+        text-align: center;
+        margin-bottom: var(--space-lg);
+    }
+    .share-title {
+        font-size: 1.75rem;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        margin: 0 0 var(--space-xs);
+    }
+    .share-user {
+        color: var(--text-muted);
+        font-size: 0.95rem;
+        margin: 0 0 var(--space-sm);
+    }
+    .share-hint {
+        margin: 0 auto;
+        max-width: 22rem;
+        padding: 0.75rem 1rem;
+        border-radius: 12px;
+        background: var(--accent-glow);
+        color: var(--text-primary);
+        font-size: 0.95rem;
+        line-height: 1.4;
+        border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+    }
+    .share-auth {
+        padding: var(--space-xl);
+        text-align: center;
+    }
+    .share-auth-icon {
+        width: 56px;
+        height: 56px;
+        margin: 0 auto var(--space-md);
+        color: var(--text-muted);
+    }
+    .share-auth-form {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-md);
+        max-width: 300px;
+        margin: var(--space-md) auto 0;
+    }
+    .share-grid {
+        display: grid;
+        gap: var(--space-md);
+    }
+    .share-card {
+        background: var(--bg-card);
+        border: 1px solid var(--border-color);
+        border-radius: 16px;
+        padding: 1.1rem 1rem 0.85rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.65rem;
+    }
+    .share-card-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: var(--space-sm);
+        text-align: left;
+    }
+    .share-card-name {
+        font-weight: 650;
+        font-size: 1.15rem;
+        line-height: 1.25;
+    }
+    .share-card-meta {
+        margin-top: 0.2rem;
+        font-size: 0.8rem;
+        color: var(--text-muted);
+        letter-spacing: 0.02em;
+    }
+    .share-badge {
+        flex-shrink: 0;
+        opacity: 0.85;
+        font-size: 0.7rem;
+    }
+    .share-btn-lg {
+        width: 100%;
+        min-height: 54px;
+        font-size: 1.1rem;
+        font-weight: 650;
+        border-radius: 14px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.55rem;
+        padding: 0.85rem 1rem;
+    }
+    .share-btn-lg .ui-icon {
+        width: 1.25rem;
+        height: 1.25rem;
+    }
+    .share-link-btn {
+        background: none;
+        border: none;
+        color: var(--text-muted);
+        font-size: 0.9rem;
+        padding: 0.35rem;
+        cursor: pointer;
+        text-decoration: underline;
+        text-underline-offset: 3px;
+        align-self: center;
+    }
+    .share-link-btn:hover {
+        color: var(--text-primary);
+    }
+    .share-loading,
+    .share-empty {
+        text-align: center;
+        padding: 2.5rem 1rem;
+        color: var(--text-muted);
+    }
+    .share-spinner {
+        width: 40px;
+        height: 40px;
+        margin: 0 auto;
+    }
+    .share-modal {
+        max-width: 420px;
+    }
+    .share-modal-body {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-md);
+        padding: 0 var(--space-md) var(--space-lg);
+    }
+    .share-qr-wrap {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: var(--space-sm);
+        padding: var(--space-md);
+        background: #fff;
+        border-radius: 16px;
+        color: #111;
+    }
+    .share-qr-wrap #qrcode {
+        display: flex;
+        justify-content: center;
+    }
+    .share-qr-caption {
+        margin: 0;
+        font-size: 0.85rem;
+        color: #444;
+    }
+    .share-extra {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-sm);
+    }
+    .share-config-text {
+        width: 100%;
+        border: 1px solid var(--border-color);
+        border-radius: 12px;
+        background: var(--bg-primary);
+        color: inherit;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 0.75rem;
+        padding: 0.75rem;
+        resize: vertical;
+        outline: none;
+    }
+    .w-full { width: 100%; }
+    .spinner {
+        border: 3px solid rgba(127, 127, 127, 0.2);
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        width: 20px;
+        height: 20px;
+        animation: share-spin 0.8s linear infinite;
+        display: inline-block;
+    }
+    @keyframes share-spin {
+        to { transform: rotate(360deg); }
+    }
+</style>
+{% endblock %}

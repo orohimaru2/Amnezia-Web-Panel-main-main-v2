@@ -1,0 +1,4 @@
+{# SVG icon via sprite — usage: {% from "macros/icons.html" import icon %} {{ icon('server') }} #}
+{% macro icon(name, class='', size=None) -%}
+<svg class="ui-icon{% if class %} {{ class }}{% endif %}"{% if size %} style="width:{{ size }};height:{{ size }};"{% endif %} aria-hidden="true" focusable="false"><use href="/static/icons.svg#{{ name }}"></use></svg>
+{%- endmacro %}

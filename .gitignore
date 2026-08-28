@@ -1,0 +1,40 @@
+# Virtual Environment
+venv/
+env/
+.venv/
+
+# PyInstaller folders
+build/
+dist/
+*.spec
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+.pytest_cache/
+.mypy_cache/
+
+# User data
+data.json
+data.json.migrated.*.bak
+tunnels_state.json
+.env
+.DS_Store
+
+# IDEs
+.vscode/
+.idea/

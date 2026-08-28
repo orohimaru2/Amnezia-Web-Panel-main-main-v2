@@ -1,0 +1,401 @@
+{% extends "base.html" %}
+{% from "macros/icons.html" import icon %}
+
+{% block title_extra %} — {{ _('invite_public_title') }}{% endblock %}
+
+{% block content %}
+<div class="share-page">
+    <header class="share-hero">
+        <h1 class="share-title">{{ invite.name }}</h1>
+        <p class="share-user">{{ _('invite_public_subtitle') }}</p>
+        {% if not need_password %}
+        <p class="share-hint">{{ _('share_copy_hint') }}</p>
+        {% endif %}
+    </header>
+
+    {% if need_password %}
+    <div class="share-auth card">
+        <div class="share-auth-icon">{{ icon('lock') }}</div>
+        <p>{{ _('invite_protected_desc') }}</p>
+        <form id="authForm" onsubmit="authInvite(event)" class="share-auth-form">
+            <input type="password" id="invitePassword" class="form-input" placeholder="{{ _('password') }}" required autofocus>
+            <button type="submit" class="btn btn-primary share-btn-lg" id="authBtn">
+                <span id="authBtnText">{{ _('login') }}</span>
+                <div class="spinner hidden" id="authSpinner"></div>
+            </button>
+        </form>
+    </div>
+    {% else %}
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:var(--space-sm); margin-bottom:var(--space-md);">
+        <div style="background:var(--bg-card); border-radius:var(--radius-md); padding:var(--space-md); text-align:center;">
+            <div style="font-size:0.72rem; color:var(--text-muted); text-transform:uppercase;">{{ _('invite_uses') }}</div>
+            <div id="usesValue" style="font-weight:700; font-size:1.15rem; margin-top:4px;">
+                {% if invite.unlimited %}∞{% else %}{{ invite.remaining }}{% endif %}
+            </div>
+        </div>
+        <div style="background:var(--bg-card); border-radius:var(--radius-md); padding:var(--space-md); text-align:center;">
+            <div style="font-size:0.72rem; color:var(--text-muted); text-transform:uppercase;">{{ _('invite_duration_short') }}</div>
+            <div style="font-weight:700; font-size:1.15rem; margin-top:4px;">
+                {% if invite.duration_days %}{{ invite.duration_days }} {{ _('days_short') }}{% else %}∞{% endif %}
+            </div>
+        </div>
+    </div>
+
+    <p id="statusHint" style="text-align:center; color:var(--text-muted); font-size:0.88rem; margin:0 0 var(--space-md);">
+        {% if invite.duration_days %}
+        {{ _('invite_duration_starts_hint').replace('{}', invite.duration_days|string) }}
+        {% else %}
+        {{ _('invite_get_config_hint') }}
+        {% endif %}
+    </p>
+
+    <div id="createBlock" {% if not invite.available %}style="display:none;"{% endif %}>
+        <div id="serverPickWrap" class="form-group" style="margin-bottom:var(--space-md); {% if not invite.allow_server_choice or not invite.servers %}display:none;{% endif %}">
+            <label class="form-label">{{ _('choose_server') }}</label>
+            <select class="form-select" id="inviteServerPick">
+                {% for s in invite.servers or [] %}
+                <option value="{{ s.id }}" {% if s.id == invite.server_id %}selected{% endif %}>{{ s.name }}{% if s.host %} ({{ s.host }}){% endif %}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <button class="btn btn-primary share-btn-lg" style="width:100%;" onclick="createInviteConfig()" id="createBtn">
+            <span id="createBtnText">{{ _('guest_get_config') }}</span>
+            <div class="spinner hidden" id="createSpinner" style="width:14px;height:14px;"></div>
+        </button>
+    </div>
+    <p id="exhaustedMsg" style="text-align:center; color:#ef4444; margin:0 0 var(--space-md); {% if invite.available or not invite.exhausted %}display:none;{% endif %}">{{ _('invite_exhausted') }}</p>
+    <p id="disabledMsg" style="text-align:center; color:#ef4444; margin:0 0 var(--space-md); {% if invite.available or invite.exhausted %}display:none;{% endif %}">{{ _('disabled') }}</p>
+
+    <div class="share-loading" id="loadingState" style="margin-top:var(--space-lg);">
+        <div class="spinner share-spinner"></div>
+        <p>{{ _('loading_share_conns') }}</p>
+    </div>
+    <div id="connectionsGrid" class="share-grid hidden"></div>
+    <div id="emptyState" class="share-empty hidden">
+        <p>{{ _('invite_no_saved_configs') }}</p>
+    </div>
+    {% endif %}
+</div>
+
+<div class="modal-backdrop" id="configModal">
+    <div class="modal share-modal">
+        <div class="modal-header">
+            <h2 class="modal-title" id="configModalTitle">{{ _('config') }}</h2>
+            <button class="modal-close" onclick="closeModal('configModal')" type="button">&times;</button>
+        </div>
+        <div id="expiresBanner" class="hidden" style="margin:0 var(--space-md) var(--space-sm); padding:var(--space-sm) var(--space-md); border-radius:var(--radius-md); background:rgba(59,130,246,0.1); color:var(--text-muted); font-size:0.85rem;"></div>
+        <div class="share-modal-body">
+            <button type="button" class="btn btn-primary share-btn-lg" id="modalCopyBtn" onclick="copyCurrentKey()">
+                {{ icon('copy') }}
+                <span>{{ _('copy_key_big') }}</span>
+            </button>
+            <div class="share-qr-wrap">
+                <div id="qrcode"></div>
+                <p class="share-qr-caption">{{ _('qr_code_tab') }}</p>
+            </div>
+            <div class="share-extra">
+                <button type="button" class="btn btn-secondary w-full" id="downloadBtn">{{ _('download_config_file') }}</button>
+                <button type="button" class="share-link-btn" onclick="toggleConfigText()">{{ _('show_config_text') }}</button>
+                <textarea class="config-text share-config-text hidden" id="configText" readonly rows="8"></textarea>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const TOKEN = "{{ token }}";
+    let currentConfig = '';
+    let currentVpnLink = '';
+
+    function escAttr(s) {
+        return String(s || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    }
+    function escHtml(s) {
+        return String(s || '')
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+    function protoLabel(p) {
+        const base = String(p || '').split('__')[0];
+        const map = {
+            awg: 'AmneziaWG', awg3: 'AmneziaWG 3.1', awg2: 'AmneziaWG 2.0', awg_legacy: 'AWG Legacy',
+            xray: 'Xray', xui: '3x-ui VLESS', hysteria: 'Hysteria 2',
+            naiveproxy: 'NaiveProxy', mieru: 'Mieru', telemt: 'Telemt', wireguard: 'WireGuard',
+        };
+        return map[base] || (base || '').toUpperCase();
+    }
+    function pickKey(config, vpnLink) {
+        const link = (vpnLink || '').trim();
+        return link || (config || '').trim();
+    }
+    async function copyKeyText(text) {
+        if (!text) throw new Error(_('error'));
+        try {
+            await navigator.clipboard.writeText(text);
+        } catch {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            ta.remove();
+        }
+        showToast(_('key_copied'), 'success');
+    }
+
+    async function authInvite(e) {
+        e.preventDefault();
+        const password = document.getElementById('invitePassword').value;
+        const btn = document.getElementById('authBtn');
+        const text = document.getElementById('authBtnText');
+        const spinner = document.getElementById('authSpinner');
+        btn.disabled = true;
+        text.classList.add('hidden');
+        spinner.classList.remove('hidden');
+        try {
+            const res = await fetch(`/api/invite/${TOKEN}/auth`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ password })
+            });
+            const data = await res.json();
+            if (data.status === 'success') window.location.reload();
+            else alert(data.error || _('login_error'));
+        } catch (err) {
+            alert(`${_('error')}: ` + err.message);
+        } finally {
+            btn.disabled = false;
+            text.classList.remove('hidden');
+            spinner.classList.add('hidden');
+        }
+    }
+
+    function fillModal(name, config, vpnLink, expiresAt) {
+        currentConfig = config || '';
+        currentVpnLink = vpnLink || '';
+        document.getElementById('configModalTitle').textContent = name;
+        document.getElementById('configText').value = currentConfig;
+        document.getElementById('configText').classList.add('hidden');
+        const banner = document.getElementById('expiresBanner');
+        if (expiresAt) {
+            banner.textContent = _('invite_config_expires_at').replace('{}', new Date(expiresAt).toLocaleString());
+            banner.classList.remove('hidden');
+        } else {
+            banner.classList.add('hidden');
+        }
+        document.getElementById('downloadBtn').onclick = () => downloadFile(currentConfig, `${name || 'vpn'}.conf`);
+        const qrContainer = document.getElementById('qrcode');
+        qrContainer.innerHTML = '';
+        const qrPayload = pickKey(currentConfig, currentVpnLink) || currentConfig;
+        if (qrPayload && typeof QRCode !== 'undefined') {
+            new QRCode(qrContainer, {
+                text: qrPayload, width: 220, height: 220,
+                colorDark: '#000000', colorLight: '#ffffff',
+                correctLevel: QRCode.CorrectLevel.L
+            });
+        }
+    }
+
+    async function copyCurrentKey() {
+        try { await copyKeyText(pickKey(currentConfig, currentVpnLink)); }
+        catch (err) { alert(`${_('error')}: ` + err.message); }
+    }
+    function toggleConfigText() {
+        document.getElementById('configText').classList.toggle('hidden');
+    }
+
+    function updateStatus(invite) {
+        if (!invite) return;
+        const uses = document.getElementById('usesValue');
+        if (uses) uses.textContent = invite.unlimited ? '∞' : String(invite.remaining ?? 0);
+        const createBlock = document.getElementById('createBlock');
+        const exhaustedMsg = document.getElementById('exhaustedMsg');
+        const disabledMsg = document.getElementById('disabledMsg');
+        if (invite.available) {
+            if (createBlock) createBlock.style.display = '';
+            if (exhaustedMsg) exhaustedMsg.style.display = 'none';
+            if (disabledMsg) disabledMsg.style.display = 'none';
+        } else {
+            if (createBlock) createBlock.style.display = 'none';
+            if (invite.exhausted) {
+                if (exhaustedMsg) exhaustedMsg.style.display = '';
+                if (disabledMsg) disabledMsg.style.display = 'none';
+            } else {
+                if (exhaustedMsg) exhaustedMsg.style.display = 'none';
+                if (disabledMsg) disabledMsg.style.display = '';
+            }
+        }
+        const wrap = document.getElementById('serverPickWrap');
+        const sel = document.getElementById('inviteServerPick');
+        if (wrap && sel && invite.allow_server_choice && (invite.servers || []).length) {
+            const prev = sel.value;
+            sel.innerHTML = '';
+            (invite.servers || []).forEach(s => {
+                const opt = document.createElement('option');
+                opt.value = String(s.id);
+                opt.textContent = s.host ? `${s.name} (${s.host})` : s.name;
+                if (String(s.id) === String(prev) || String(s.id) === String(invite.server_id)) opt.selected = true;
+                sel.appendChild(opt);
+            });
+            wrap.style.display = '';
+        } else if (wrap) {
+            wrap.style.display = 'none';
+        }
+    }
+
+    async function fetchInviteConfig(connId) {
+        const res = await fetch(`/api/invite/${TOKEN}/config/${connId}`, { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok || data.error) throw new Error(data.error || _('error'));
+        return data;
+    }
+
+    async function loadConnections() {
+        const loading = document.getElementById('loadingState');
+        if (!loading) return;
+        try {
+            const res = await fetch(`/api/invite/${TOKEN}/connections`);
+            if (res.status === 401) return;
+            const data = await res.json();
+            loading.classList.add('hidden');
+            if (data.invite) updateStatus(data.invite);
+
+            const grid = document.getElementById('connectionsGrid');
+            const empty = document.getElementById('emptyState');
+            if (!data.connections || !data.connections.length) {
+                empty.classList.remove('hidden');
+                grid.classList.add('hidden');
+                grid.innerHTML = '';
+                return;
+            }
+            empty.classList.add('hidden');
+            grid.classList.remove('hidden');
+            grid.innerHTML = data.connections.map(c => `
+                <article class="share-card" data-conn-id="${escHtml(c.id)}">
+                    <div class="share-card-top">
+                        <div>
+                            <div class="share-card-name">${escHtml(c.name)}</div>
+                            <div class="share-card-meta">${escHtml(protoLabel(c.protocol))} · ${escHtml(c.server_name || '')}</div>
+                        </div>
+                        <span class="badge badge-success share-badge">${_('active')}</span>
+                    </div>
+                    <button type="button" class="btn btn-primary share-btn-lg share-copy-btn"
+                        onclick="copyKeyFromCard(this, '${escAttr(c.id)}')">
+                        ${typeof uiIcon === 'function' ? uiIcon('copy') : '📋'}
+                        <span class="share-copy-label">${_('copy_key_big')}</span>
+                    </button>
+                    <button type="button" class="share-link-btn"
+                        onclick="showDetails('${escAttr(c.id)}', '${escAttr(c.name)}')">
+                        ${_('more_qr_download')}
+                    </button>
+                </article>
+            `).join('');
+        } catch (err) {
+            console.error(err);
+            loading.classList.add('hidden');
+        }
+    }
+
+    async function copyKeyFromCard(btn, connId) {
+        const label = btn.querySelector('.share-copy-label');
+        const prev = label ? label.textContent : '';
+        btn.disabled = true;
+        if (label) label.textContent = _('copying_key');
+        try {
+            const data = await fetchInviteConfig(connId);
+            await copyKeyText(pickKey(data.config, data.vpn_link));
+        } catch (err) {
+            alert(`${_('error')}: ` + err.message);
+        } finally {
+            btn.disabled = false;
+            if (label) label.textContent = prev || _('copy_key_big');
+        }
+    }
+
+    async function showDetails(connId, name) {
+        try {
+            const data = await fetchInviteConfig(connId);
+            fillModal(name, data.config, data.vpn_link || '', data.expires_at);
+            openModal('configModal');
+        } catch (err) {
+            alert(`${_('error')}: ` + err.message);
+        }
+    }
+
+    async function createInviteConfig() {
+        const btn = document.getElementById('createBtn');
+        const text = document.getElementById('createBtnText');
+        const spinner = document.getElementById('createSpinner');
+        btn.disabled = true;
+        text.classList.add('hidden');
+        spinner.classList.remove('hidden');
+        try {
+            const body = { name: 'Invite VPN' };
+            const wrap = document.getElementById('serverPickWrap');
+            const sel = document.getElementById('inviteServerPick');
+            if (wrap && wrap.style.display !== 'none' && sel && sel.value !== '') {
+                body.server_id = parseInt(sel.value, 10);
+            }
+            const res = await fetch(`/api/invite/${TOKEN}/create`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            const data = await res.json();
+            if (!res.ok || data.error) throw new Error(data.error || _('error'));
+            const share = data.subscription_url || data.config || '';
+            if (share || data.vpn_link) {
+                fillModal(data.connection?.name || 'VPN', share || data.config || '', data.vpn_link || share, data.expires_at);
+                await copyKeyText(pickKey(share || data.config || '', data.vpn_link || share));
+                openModal('configModal');
+            }
+            updateStatus(data.invite);
+            await loadConnections();
+        } catch (err) {
+            alert(`${_('error')}: ` + err.message);
+        } finally {
+            btn.disabled = false;
+            text.classList.remove('hidden');
+            spinner.classList.add('hidden');
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', loadConnections);
+</script>
+
+<style>
+    .share-page { max-width: 440px; margin: 1.25rem auto 2.5rem; padding: 0 var(--space-md); }
+    .share-hero { text-align: center; margin-bottom: var(--space-lg); }
+    .share-title { font-size: 1.75rem; font-weight: 700; letter-spacing: -0.02em; margin: 0 0 var(--space-xs); }
+    .share-user { color: var(--text-muted); font-size: 0.95rem; margin: 0 0 var(--space-sm); }
+    .share-hint {
+        margin: 0 auto; max-width: 22rem; padding: 0.75rem 1rem; border-radius: 12px;
+        background: var(--accent-glow); color: var(--text-primary); font-size: 0.95rem; line-height: 1.4;
+        border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+    }
+    .share-grid { display: flex; flex-direction: column; gap: var(--space-md); margin-top: var(--space-lg); }
+    .share-card {
+        background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg);
+        padding: var(--space-md); display: flex; flex-direction: column; gap: var(--space-sm);
+    }
+    .share-card-top { display: flex; justify-content: space-between; gap: var(--space-sm); align-items: flex-start; }
+    .share-card-name { font-weight: 600; }
+    .share-card-meta { font-size: 0.8rem; color: var(--text-muted); margin-top: 2px; }
+    .share-btn-lg { width: 100%; justify-content: center; min-height: 48px; }
+    .share-link-btn {
+        background: none; border: none; color: var(--accent); cursor: pointer; font-size: 0.85rem; padding: 4px 0;
+    }
+    .share-loading, .share-empty { text-align: center; color: var(--text-muted); padding: var(--space-lg) 0; }
+    .share-modal { max-width: 420px; }
+    .share-modal-body { padding: var(--space-md) var(--space-lg) var(--space-lg); display: flex; flex-direction: column; gap: var(--space-md); }
+    .share-qr-wrap { text-align: center; }
+    .share-qr-caption { font-size: 0.8rem; color: var(--text-muted); margin-top: var(--space-xs); }
+    .share-config-text { width: 100%; font-family: monospace; font-size: 0.75rem; }
+    .share-auth { max-width: 360px; margin: 0 auto; text-align: center; padding: var(--space-xl); }
+    .share-auth-form { display: flex; flex-direction: column; gap: var(--space-md); margin-top: var(--space-md); }
+    .spinner {
+        border: 3px solid rgba(255,255,255,0.1); border-top: 3px solid var(--accent-color);
+        border-radius: 50%; width: 20px; height: 20px; animation: spin 1s linear infinite; display: inline-block;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+{% endblock %}
