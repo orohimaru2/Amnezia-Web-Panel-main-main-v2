@@ -1155,8 +1155,8 @@ async def wait_for_tunnel_url(provider: str, seconds: int = 20):
     return get_tunnel_status(provider)
 
 
-BASE_PROTOCOLS = ['awg', 'awg2', 'awg3', 'awg_legacy', 'xray', 'telemt', 'hysteria', 'naiveproxy', 'mieru', 'dns', 'wireguard', 'socks5', 'adguard', 'nginx']
-MULTI_INSTANCE_PROTOCOLS = {'awg', 'awg2', 'awg3', 'awg_legacy', 'xray', 'telemt', 'hysteria', 'socks5'}
+BASE_PROTOCOLS = ['awg', 'awg2', 'awg3', 'awg_legacy', 'xray', 'telemt', 'mtproxy', 'hysteria', 'naiveproxy', 'mieru', 'dns', 'wireguard', 'socks5', 'adguard', 'nginx']
+MULTI_INSTANCE_PROTOCOLS = {'awg', 'awg2', 'awg3', 'awg_legacy', 'xray', 'telemt', 'mtproxy', 'hysteria', 'socks5'}
 NON_DOCKER_PROTOCOLS = frozenset({'mieru'})
 
 
@@ -1198,6 +1198,7 @@ def protocol_display_name(protocol: str) -> str:
         'awg_legacy': 'AmneziaWG Legacy',
         'xray': 'Xray',
         'telemt': 'Telemt',
+        'mtproxy': 'MTProxy',
         'hysteria': 'Hysteria 2',
         'naiveproxy': 'NaiveProxy',
         'mieru': 'Mieru',
@@ -1221,6 +1222,7 @@ def protocol_container_name(protocol: str) -> Optional[str]:
         'awg_legacy': 'amnezia-awg-legacy',
         'xray': 'amnezia-xray',
         'telemt': 'telemt',
+        'mtproxy': 'mtproxy',
         'hysteria': 'amnezia-hysteria',
         'naiveproxy': 'amnezia-naiveproxy',
         'mieru': 'mita',
@@ -1248,6 +1250,9 @@ def get_protocol_manager(ssh, protocol: str):
     elif base == 'telemt':
         from managers.telemt_manager import TelemtManager
         return TelemtManager(ssh, protocol)
+    elif base == 'mtproxy':
+        from managers.mtproxy_manager import MtproxyManager
+        return MtproxyManager(ssh, protocol)
     elif base == 'dns':
         from managers.dns_manager import DNSManager
         return DNSManager(ssh)
@@ -2240,6 +2245,9 @@ class InstallProtocolRequest(BaseModel):
     tls_emulation: Optional[bool] = None
     tls_domain: Optional[str] = None
     max_connections: Optional[int] = None
+    # MTProxy
+    mtproxy_secret: Optional[str] = None
+    mtproxy_ad_tag: Optional[str] = None
     # SOCKS5
     socks5_username: Optional[str] = None
     socks5_password: Optional[str] = None
@@ -3796,6 +3804,13 @@ async def api_install_protocol(request: Request, server_id: int, req: InstallPro
                 tls_emulation=req.tls_emulation if req.tls_emulation is not None else True,
                 tls_domain=req.tls_domain,
                 max_connections=req.max_connections if req.max_connections is not None else 0
+            )
+        elif install_base == 'mtproxy':
+            result = manager.install_protocol(
+                protocol_type=install_protocol,
+                port=req.port,
+                secret=req.mtproxy_secret,
+                ad_tag=req.mtproxy_ad_tag
             )
         elif install_base == 'xray':
             result = manager.install_protocol(
