@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  mtproxy:
+    build: .
+    container_name: mtproxy
+    restart: unless-stopped
+    ports:
+      - "443:443"
+      - "127.0.0.1:9090:9090"
+      - "127.0.0.1:9091:9091"
+    volumes:
+      - ./config:/config
+    networks:
+      - mtproxy-network
+
+networks:
+  mtproxy-network:
+    driver: bridge

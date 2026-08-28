@@ -1,0 +1,52 @@
+### MTProxy Config.toml
+# Official MTProto Proxy for Telegram
+
+# === General Settings ===
+[general]
+use_middle_proxy = true
+# Global ad_tag fallback when user has no per-user tag in [access.user_ad_tags]
+# ad_tag = "00000000000000000000000000000000"
+
+# === Log Level ===
+log_level = "normal"
+
+[general.modes]
+classic = false
+secure = false
+tls = true
+
+[general.links]
+show = "*"
+# public_host = "proxy.example.com"  # Host (IP or domain) for tg:// links
+public_port = 443                  # Port for tg:// links (default: server.port)
+
+# === Server Binding ===
+[server]
+port = 443
+metrics_port = 9090
+metrics_listen = "0.0.0.0:9090"
+metrics_whitelist = ["127.0.0.1", "::1", "0.0.0.0/0"]
+max_connections = 0    # 0 - unlimited
+
+[server.api]
+enabled = true
+listen = "0.0.0.0:9091"
+whitelist = ["127.0.0.0/8"]
+minimal_runtime_enabled = false
+minimal_runtime_cache_ttl_ms = 1000
+
+# Listen on multiple interfaces/IPs - IPv4
+[[server.listeners]]
+ip = "0.0.0.0"
+
+# === Anti-Censorship & Masking ===
+[censorship]
+tls_domain = "telegram.org"
+mask = false
+tls_emulation = true        # Fetch real cert lengths and emulate TLS records
+tls_front_dir = "tlsfront"   # Cache directory for TLS emulation
+
+# === Access Users ===
+[access.users]
+# format: "username" = "32_hex_chars_secret"
+# hello = "00000000000000000000000000000000"
