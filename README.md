@@ -59,7 +59,7 @@ Configuration panel for system parameters and preferences:
 ## 🚀 Key Features
 
 *   **⚡ VPN Protocols**:
-    *   **AmneziaWG (AWG / AWG 2.0 / AWG Legacy)**: Advanced WireGuard-based protocol with S3/S4 obfuscation to bypass deep packet inspection (DPI). Three coexisting variants — modern AWG 2.0 with full junk-packet masking, and a legacy variant for older clients.
+    *   **AmneziaWG (AWG / AWG 2.0,3.1 / AWG Legacy)**: Advanced WireGuard-based protocol with S3/S4 obfuscation to bypass deep packet inspection (DPI). Three coexisting variants — modern AWG 2.0 with full junk-packet masking, and a legacy variant for older clients.
     *   **Classic WireGuard**: Standard, high-performance WireGuard protocol for unmatched speed and broad device compatibility with traffic monitoring support.
     *   **Xray (XTLS-Reality)**: Stealthy protocol that masks VPN traffic as standard HTTPS browsing. Pinned to **Xray-core v26.x**; transparently reads both the **panel layout** (`meta.json` + `clientsTable.json`) and the **native Amnezia client layout** (`xray_*.key` files + `clientsTable`), so a node first installed via the official mobile/desktop app can be attached to the panel without re-installation.
     *   **Hysteria 2**: QUIC/HTTP3 proxy from [apernet/hysteria](https://github.com/apernet/hysteria) via `tobyxdd/hysteria:v2` — Let's Encrypt TLS, salamander obfuscation, password auth, `hy2://` share links. Per-server SSL domain/email defaults, renew from settings; install requires free TCP **80** and **443**.
