@@ -60,3 +60,30 @@ tls_front_dir = "tlsfront"   # Cache directory for TLS emulation
 [access.users]
 # format: "username" = "32_hex_chars_secret"
 hello = "00000000000000000000000000000000"
+
+# BEGIN_TELEMT_WEB
+# Telegram Web proxy (tg://webproxy). The panel replaces this block on install.
+# Telemt does not terminate TLS: nginx or HAProxy on port 443 must forward
+# the vhost to 127.0.0.1:18080 and pass Host plus X-Forwarded-For.
+# [[server.listeners]]
+# ip = "0.0.0.0"
+# port = 18080
+# transport = "web"
+# proxy_protocol = false
+# reuse_allow = false
+# web_client_ip_source = "x_forwarded_for"
+# web_trusted_proxy_cidrs = ["127.0.0.1/32", "172.16.0.0/12", "10.0.0.0/8", "192.168.0.0/16"]
+#
+# [web]
+# enabled = true
+# carrier = "https"
+#
+# [[web.vhosts]]
+# host = "proxy.example.com"
+# public_addr = "203.0.113.10:443"
+#
+# [web.vhosts.decoy]
+# mode = "static_directory"
+# directory = "/app/conf/public"
+# index = "index.html"
+# END_TELEMT_WEB

@@ -767,6 +767,27 @@
                     <input class="form-input" type="number" id="installTelemtMaxConns" value="0" min="0">
                     <div class="form-hint">{{ _('max_connections_hint') }}</div>
                 </div>
+                <div class="form-group">
+                    <label class="form-label" style="display:flex; justify-content:space-between; align-items:center;">
+                        {{ _('telemt_web_proxy') }}
+                        <label class="switch">
+                            <input type="checkbox" id="installTelemtWeb"
+                                onchange="document.getElementById('telemtWebGroup').style.display = this.checked ? 'block' : 'none'">
+                            <span class="slider"></span>
+                        </label>
+                    </label>
+                    <div class="form-hint">{{ _('telemt_web_proxy_hint') }}</div>
+                </div>
+                <div id="telemtWebGroup" style="display:none;">
+                    <div class="form-group">
+                        <label class="form-label">{{ _('telemt_web_domain') }}</label>
+                        <input class="form-input" type="text" id="installTelemtWebDomain" placeholder="proxy.example.com" autocomplete="off">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">{{ _('telemt_web_ip') }}</label>
+                        <input class="form-input" type="text" id="installTelemtWebIp" placeholder="203.0.113.10" autocomplete="off">
+                    </div>
+                </div>
             </div>
 
             <div id="mtproxyOptions"
@@ -2796,6 +2817,21 @@
                 params.tls_emulation = document.getElementById('installTelemtTls').checked;
                 params.tls_domain = document.getElementById('installTelemtDomain').value;
                 params.max_connections = parseInt(document.getElementById('installTelemtMaxConns').value) || 0;
+                if (document.getElementById('installTelemtWeb').checked) {
+                    const webDomain = document.getElementById('installTelemtWebDomain').value.trim();
+                    if (!webDomain) {
+                        clearInterval(progressInterval);
+                        showToast(_('telemt_web_domain_required'), 'error');
+                        btn.disabled = false;
+                        text.textContent = _('install');
+                        spinner.classList.add('hidden');
+                        document.getElementById('installForm').classList.remove('hidden');
+                        progressDiv.classList.add('hidden');
+                        return;
+                    }
+                    params.web_domain = webDomain;
+                    params.web_public_ip = document.getElementById('installTelemtWebIp').value.trim();
+                }
             } else if (protoBase(currentInstallProto) === 'socks5') {
                 params.socks5_username = document.getElementById('installSocks5User').value || 'proxy_user';
                 params.socks5_password = document.getElementById('installSocks5Pass').value || '';
@@ -3555,7 +3591,10 @@
                 document.getElementById('vpnLinkText').textContent = currentVpnLink;
                 const hintEl = document.getElementById('configClientHint');
                 if (hintEl) {
-                    if (protoBase(proto) === 'naiveproxy') {
+                    if (result.web_link) {
+                        hintEl.textContent = `${_('telemt_web_proxy')}: ${result.web_link}`;
+                        hintEl.classList.remove('hidden');
+                    } else if (protoBase(proto) === 'naiveproxy') {
                         hintEl.textContent = _('naiveproxy_client_hint');
                         hintEl.classList.remove('hidden');
                     } else {

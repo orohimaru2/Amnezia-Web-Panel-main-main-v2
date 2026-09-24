@@ -41,6 +41,97 @@ class TelemtManager:
     def _config_path(self):
         return f'{self.remote_dir}/config.toml'
 
+    def _enable_web_proxy(self, config_content, domain, public_ip):
+        block = "\n".join([
+            "[[server.listeners]]",
+            'ip = "0.0.0.0"',
+            "port = 18080",
+            'transport = "web"',
+            "proxy_protocol = false",
+            "reuse_allow = false",
+            'web_client_ip_source = "x_forwarded_for"',
+            'web_trusted_proxy_cidrs = ["127.0.0.1/32", "172.16.0.0/12", "10.0.0.0/8", "192.168.0.0/16"]',
+            "",
+            "[web]",
+            "enabled = true",
+            'carrier = "https"',
+            "",
+            "[[web.vhosts]]",
+            f'host = "{domain}"',
+            f'public_addr = "{public_ip}:443"',
+            "",
+            "[web.vhosts.decoy]",
+            'mode = "static_directory"',
+            'directory = "/app/conf/public"',
+            'index = "index.html"',
+        ])
+        pattern = r'# BEGIN_TELEMT_WEB\n.*?# END_TELEMT_WEB'
+        if re.search(pattern, config_content, flags=re.S):
+            return re.sub(pattern, block, config_content, count=1, flags=re.S)
+        return config_content.rstrip() + "\n\n" + block + "\n"
+
+    def _web_vhost_host(self, config_text):
+        in_web = False
+        enabled = False
+        host = ""
+        for line in (config_text or "").splitlines():
+            stripped = line.strip()
+            if stripped == "[web]":
+                in_web = True
+                continue
+            if in_web and stripped.startswith("[") and stripped != "[web]":
+                in_web = False
+            if in_web and re.match(r'enabled\s*=\s*true\b', stripped):
+                enabled = True
+            match = re.match(r'host\s*=\s*"([^"]+)"', stripped)
+            if match and not host:
+                host = match.group(1).strip()
+        if enabled and host and host != "proxy.example.com":
+            return host
+        return ""
+
+    def _ensure_web_profile(self, config_text, username):
+        if not self._web_vhost_host(config_text):
+            return config_text
+        if re.search(rf'(?m)^user\s*=\s*"{re.escape(username)}"$', config_text):
+            return config_text
+        profile = f'\n[[web.vhosts.profiles]]\nuser = "{username}"\nsecret_mode = "dd"\n'
+        return config_text.rstrip() + profile
+
+    def _drop_web_profile(self, config_text, username):
+        lines = config_text.splitlines()
+        out = []
+        i = 0
+        while i < len(lines):
+            if lines[i].strip() == "[[web.vhosts.profiles]]":
+                chunk = [lines[i]]
+                i += 1
+                while i < len(lines) and lines[i].strip() and not lines[i].strip().startswith("["):
+                    chunk.append(lines[i])
+                    i += 1
+                if any(re.match(rf'user\s*=\s*"{re.escape(username)}"$', item.strip()) for item in chunk):
+                    continue
+                out.extend(chunk)
+                continue
+            out.append(lines[i])
+            i += 1
+        return "\n".join(out) + ("\n" if config_text.endswith("\n") else "")
+
+    def web_proxy_link(self, client_id):
+        """tg://webproxy link for Telegram Desktop WEB mode. Empty when web proxy is off."""
+        config_text = self._get_server_config()
+        host = self._web_vhost_host(config_text)
+        if not host:
+            return ""
+        users = self._parse_users_from_config(config_text)
+        secret = users.get(client_id) or users.get(str(client_id).lstrip("#").strip()) or ""
+        secret = secret.strip()
+        if not re.fullmatch(r"[0-9a-fA-F]{32}", secret):
+            return ""
+        if not re.search(rf'(?m)^user\s*=\s*"{re.escape(str(client_id).lstrip("#").strip())}"$', config_text):
+            return ""
+        return f"tg://webproxy?server={host}&secret=dd{secret.lower()}"
+
     def _api_host_ports(self):
         # Host API mappings are only for diagnostics; panel talks via docker exec.
         # Keep first instance backward-compatible, avoid 9090/9091 collisions later.
@@ -160,7 +251,7 @@ docker compose version
         if code != 0:
             raise RuntimeError(f"Failed to install docker compose plugin: {err or out}")
 
-    def install_protocol(self, protocol_type='telemt', port='443', tls_emulation=True, tls_domain="", max_connections=0):
+    def install_protocol(self, protocol_type='telemt', port='443', tls_emulation=True, tls_domain="", max_connections=0, web_domain="", web_public_ip=""):
         results = []
         if not self.check_docker_installed():
             results.append("Installing Docker...")
@@ -198,6 +289,17 @@ docker compose version
             config_content = config_content.replace('[general.links]', f'[general.links]\npublic_host = "{self.ssh.host}"')
             
         config_content = re.sub(r'public_port\s*=\s*\d+', f'public_port = {port}', config_content)
+
+        web_domain = (web_domain or '').strip().lower().rstrip('.')
+        web_public_ip = (web_public_ip or '').strip()
+        if web_domain:
+            if not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)+', web_domain):
+                raise RuntimeError('Telegram Web proxy domain is invalid')
+            if not web_public_ip:
+                web_public_ip = (self.ssh.host or '').strip()
+            if not re.fullmatch(r'(?:\d{1,3}\.){3}\d{1,3}', web_public_ip):
+                raise RuntimeError('Telegram Web proxy needs the server public IPv4 address')
+            config_content = self._enable_web_proxy(config_content, web_domain, web_public_ip)
         
         # Remove default hello user
         config_content = re.sub(r'^hello\s*=\s*".*?"', '', config_content, flags=re.MULTILINE)
@@ -214,7 +316,18 @@ docker compose version
             api_port_9090, api_port_9091 = self._api_host_ports()
             compose_content = re.sub(r'"127\.0\.0\.1:9090:9090"', f'"127.0.0.1:{api_port_9090}:9090"', compose_content)
             compose_content = re.sub(r'"127\.0\.0\.1:9091:9091"', f'"127.0.0.1:{api_port_9091}:9091"', compose_content)
+        if web_domain:
+            web_port = 18080 if self.instance <= 1 else 18080 + self.instance
+            compose_content = compose_content.replace(
+                '      - "127.0.0.1:9091:9091"\n',
+                f'      - "127.0.0.1:9091:9091"\n      - "127.0.0.1:{web_port}:18080"\n',
+            )
         self.ssh.upload_file_sudo(compose_content, f"{remote_dir}/docker-compose.yml")
+        public_index = os.path.join(local_dir, 'public', 'index.html')
+        if os.path.isfile(public_index):
+            self.ssh.run_sudo_command(f"mkdir -p {remote_dir}/public")
+            with open(public_index, 'r', encoding='utf-8') as f:
+                self.ssh.upload_file_sudo(f.read(), f"{remote_dir}/public/index.html")
         
         # Upload Dockerfile
         with open(os.path.join(local_dir, 'Dockerfile'), 'r', encoding='utf-8') as f:
@@ -391,6 +504,7 @@ docker compose version
             config_text = self._insert_into_section(config_text, "access.user_max_tcp_conns", f'{username} = {val}')
             api_payload['max_tcp_conns'] = val
 
+        config_text = self._ensure_web_profile(config_text, username)
         # Save config to host
         self.ssh.upload_file_sudo(config_text.replace('\r\n', '\n'), f"{self._config_path()}")
         
@@ -516,7 +630,8 @@ docker compose version
             if stripped.startswith(f"{client_id} ") or stripped.startswith(f"{client_id}="):
                 continue
             new_lines.append(line)
-        self.ssh.upload_file_sudo('\n'.join(new_lines).replace('\r\n', '\n'), f"{self._config_path()}")
+        cleaned = self._drop_web_profile('\n'.join(new_lines), client_id)
+        self.ssh.upload_file_sudo(cleaned.replace('\r\n', '\n'), f"{self._config_path()}")
 
     def toggle_client(self, protocol_type, client_id, enable, restart=True):
         # API doesn't have a direct "toggle", so we either set a huge quota or remove/re-add

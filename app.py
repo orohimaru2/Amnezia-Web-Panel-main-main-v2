@@ -2298,6 +2298,8 @@ class InstallProtocolRequest(BaseModel):
     tls_emulation: Optional[bool] = None
     tls_domain: Optional[str] = None
     max_connections: Optional[int] = None
+    web_domain: Optional[str] = None
+    web_public_ip: Optional[str] = None
     # MTProxy
     mtproxy_secret: Optional[str] = None
     mtproxy_ad_tag: Optional[str] = None
@@ -3871,7 +3873,9 @@ async def api_install_protocol(request: Request, server_id: int, req: InstallPro
                 port=req.port,
                 tls_emulation=req.tls_emulation if req.tls_emulation is not None else True,
                 tls_domain=req.tls_domain,
-                max_connections=req.max_connections if req.max_connections is not None else 0
+                max_connections=req.max_connections if req.max_connections is not None else 0,
+                web_domain=req.web_domain or '',
+                web_public_ip=req.web_public_ip or '',
             )
         elif install_base == 'mtproxy':
             result = manager.install_protocol(
@@ -5287,12 +5291,15 @@ async def api_get_connection_config(request: Request, server_id: int, req: Conne
         port = proto_info.get('port', '55424')
         ssh = get_ssh(server)
         ssh.connect()
+        web_link = ''
         try:
             config = _read_client_config(ssh, server, req.protocol, req.client_id, port)
+            if protocol_base(req.protocol) == 'telemt':
+                web_link = get_protocol_manager(ssh, req.protocol).web_proxy_link(req.client_id) or ''
         finally:
             ssh.disconnect()
         vpn_link = generate_vpn_link(config) if config else ''
-        return {'config': config, 'vpn_link': vpn_link}
+        return {'config': config, 'vpn_link': vpn_link, 'web_link': web_link}
     except RuntimeError as e:
         unavailable = _config_unavailable_response(e, server_id)
         if unavailable:
@@ -6609,14 +6616,22 @@ async def _fetch_connection_config_payload(data: dict, conn: dict, expires_at: O
     port = proto_info.get('port', '55424')
     ssh = get_ssh(server)
     await asyncio.to_thread(ssh.connect)
+    web_link = ''
     try:
         config = await asyncio.to_thread(
             _read_client_config, ssh, server, protocol, conn['client_id'], port,
         )
+        if protocol_base(protocol) == 'telemt':
+            web_link = await asyncio.to_thread(
+                get_protocol_manager(ssh, protocol).web_proxy_link, conn['client_id'],
+            ) or ''
     finally:
         await asyncio.to_thread(ssh.disconnect)
     vpn_link = generate_vpn_link(config) if config else ''
-    return {'config': config, 'vpn_link': vpn_link, 'expires_at': expires_at}
+    payload = {'config': config, 'vpn_link': vpn_link, 'expires_at': expires_at}
+    if web_link:
+        payload['web_link'] = web_link
+    return payload
 
 
 async def _delete_remote_client(data: dict, conn: dict) -> None:
