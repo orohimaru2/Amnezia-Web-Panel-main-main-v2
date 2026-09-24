@@ -9,9 +9,14 @@ sync used to open many Paramiko sessions to the same host and then fail with
 "Timeout opening channel", stalling worker threads until the panel looked
 "dead" and got restarted by the orchestrator.
 
-We serialize *all* SSH work per (host, port, user) with an RLock, and keep a
+We serialize *all* SSH work per (host, port, user) with a Lock, and keep a
 small global cap on concurrent SSH hosts. Nested calls on the same thread
-(re-entrant) are allowed.
+are tracked explicitly so they do not lock twice.
+
+The lock must be a plain Lock, not an RLock: connect() and disconnect()
+often run on different asyncio thread-pool workers. An RLock can only be
+released by the thread that acquired it, which surfaced as
+"cannot release un-acquired lock" when fetching a client config.
 """
 
 import io
@@ -23,7 +28,8 @@ import paramiko
 
 logger = logging.getLogger(__name__)
 
-# Per-host serialization (RLock = re-entrant for nested run_command while held).
+# Per-host serialization. Plain Lock so another thread can release it
+# (connect/disconnect are separate asyncio.to_thread calls).
 _HOST_LOCKS = {}
 _HOST_LOCKS_GUARD = threading.Lock()
 # Cap how many different hosts can run SSH work at once.
@@ -33,8 +39,10 @@ _POOL_GUARD = threading.Lock()
 _POOL_TTL = 60
 _SWEEPER_STARTED = False
 
-# Thread-local: which host keys this thread already holds (for re-entrancy).
-_TLS = threading.local()
+# Which thread owns each host key. Re-entry is per owner thread, not RLock.
+_SCOPE_GUARD = threading.Lock()
+_HELD = {}   # thread ident -> set of host keys
+_OWNER = {}  # host key -> thread ident
 
 
 def host_key(host, port, username):
@@ -46,32 +54,53 @@ def host_ssh_lock(host, port, username):
     with _HOST_LOCKS_GUARD:
         lock = _HOST_LOCKS.get(key)
         if lock is None:
-            lock = threading.RLock()
+            lock = threading.Lock()
             _HOST_LOCKS[key] = lock
         return lock
 
 
-def _held_keys():
-    held = getattr(_TLS, 'held', None)
+def _holds_host_key(key):
+    with _SCOPE_GUARD:
+        held = _HELD.get(threading.get_ident())
+        return bool(held and key in held)
+
+
+def _mark_held(key):
+    ident = threading.get_ident()
+    held = _HELD.get(ident)
     if held is None:
         held = set()
-        _TLS.held = held
-    return held
+        _HELD[ident] = held
+    held.add(key)
+    _OWNER[key] = ident
+
+
+def _unmark_held(key):
+    """Drop ownership even if release runs on a different thread than acquire."""
+    owner = _OWNER.pop(key, None)
+    if owner is None:
+        owner = threading.get_ident()
+    held = _HELD.get(owner)
+    if not held:
+        return
+    held.discard(key)
+    if not held:
+        _HELD.pop(owner, None)
 
 
 def _acquire_host_scope(host, port, username, timeout=60):
-    """Acquire per-host RLock (+ global sem on first acquire). Returns (lock, acquired_new)."""
+    """Acquire per-host Lock (+ global sem on first acquire). Returns (lock, acquired_new)."""
     key = host_key(host, port, username)
     lock = host_ssh_lock(host, port, username)
-    held = _held_keys()
-    if key in held:
+    if _holds_host_key(key):
         return lock, False
     if not lock.acquire(timeout=timeout):
         raise TimeoutError(f"SSH host busy (lock timeout): {host}")
     if not _GLOBAL_SSH_SEM.acquire(timeout=timeout):
         lock.release()
         raise TimeoutError(f"SSH global limit timeout: {host}")
-    held.add(key)
+    with _SCOPE_GUARD:
+        _mark_held(key)
     return lock, True
 
 
@@ -79,8 +108,8 @@ def _release_host_scope(host, port, username, acquired_new):
     if not acquired_new:
         return
     key = host_key(host, port, username)
-    held = _held_keys()
-    held.discard(key)
+    with _SCOPE_GUARD:
+        _unmark_held(key)
     _GLOBAL_SSH_SEM.release()
     host_ssh_lock(host, port, username).release()
 
@@ -292,7 +321,7 @@ class SSHManager:
         """Execute command on remote server."""
         # Ensure host is serialized even if caller forgot connect() session lock
         # (e.g. leftover client). Prefer existing session ownership.
-        need_scope = not self._session_owned and host_key(self.host, self.port, self.username) not in _held_keys()
+        need_scope = not self._session_owned and not _holds_host_key(host_key(self.host, self.port, self.username))
         acquired = False
         if need_scope:
             _, acquired = _acquire_host_scope(self.host, self.port, self.username)
@@ -425,7 +454,7 @@ class SSHManager:
 
     def upload_file(self, content, remote_path):
         """Upload text content to a remote file via SFTP."""
-        need_scope = not self._session_owned and host_key(self.host, self.port, self.username) not in _held_keys()
+        need_scope = not self._session_owned and not _holds_host_key(host_key(self.host, self.port, self.username))
         acquired = False
         if need_scope:
             _, acquired = _acquire_host_scope(self.host, self.port, self.username)
@@ -461,7 +490,7 @@ class SSHManager:
 
     def download_file(self, remote_path):
         """Download text content from a remote file."""
-        need_scope = not self._session_owned and host_key(self.host, self.port, self.username) not in _held_keys()
+        need_scope = not self._session_owned and not _holds_host_key(host_key(self.host, self.port, self.username))
         acquired = False
         if need_scope:
             _, acquired = _acquire_host_scope(self.host, self.port, self.username)
@@ -482,7 +511,7 @@ class SSHManager:
 
     def file_exists(self, remote_path):
         """Check if a remote file exists."""
-        need_scope = not self._session_owned and host_key(self.host, self.port, self.username) not in _held_keys()
+        need_scope = not self._session_owned and not _holds_host_key(host_key(self.host, self.port, self.username))
         acquired = False
         if need_scope:
             _, acquired = _acquire_host_scope(self.host, self.port, self.username)
