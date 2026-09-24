@@ -2933,3 +2933,263 @@ body,
     width: 14px;
     height: 14px;
 }
+
+/* ===== Many servers: compact directory ===== */
+.server-directory-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-sm);
+    margin-bottom: var(--space-md);
+    flex-wrap: wrap;
+}
+
+.server-directory-search {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    min-width: min(100%, 240px);
+    padding: 0 12px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+}
+
+.server-directory-search .ui-icon {
+    color: var(--text-muted);
+}
+
+.server-directory-search input {
+    flex: 1;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    padding: 10px 0;
+    outline: none;
+    font: inherit;
+    min-width: 0;
+}
+
+.server-directory-empty {
+    text-align: center;
+    color: var(--text-muted);
+    padding: var(--space-lg) 0;
+}
+
+.server-card.is-filtered-out {
+    display: none !important;
+}
+
+.server-grid-compact {
+    grid-template-columns: 1fr;
+    gap: 8px;
+}
+
+.server-grid-compact .server-card {
+    display: grid;
+    grid-template-columns: minmax(190px, 1.3fr) minmax(0, 1.5fr) auto;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+}
+
+.server-grid-compact .server-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    font-size: 1rem;
+    box-shadow: none;
+}
+
+.server-grid-compact .server-icon .ui-icon {
+    width: 18px;
+    height: 18px;
+}
+
+.server-grid-compact .server-meta,
+.server-grid-compact .server-protocols,
+.server-grid-compact .server-actions {
+    margin: 0;
+}
+
+.server-grid-compact .server-meta {
+    align-items: center;
+}
+
+.server-grid-compact .server-name {
+    font-size: 0.95rem;
+}
+
+.server-grid-compact .server-protocols {
+    flex-wrap: nowrap;
+    overflow: hidden;
+    min-width: 0;
+}
+
+.server-grid-compact .server-protocols .badge {
+    padding: 3px 8px;
+    font-size: 0.68rem;
+}
+
+.server-grid-compact .server-actions {
+    padding: 0;
+    border: 0;
+}
+
+.server-grid-compact .server-actions .btn {
+    flex: 0 0 auto;
+}
+
+.invite-filter-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 8px;
+}
+
+.invite-filter {
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    color: var(--text-muted);
+    border-radius: var(--radius-full);
+    padding: 4px 10px;
+    font-size: 0.75rem;
+    cursor: pointer;
+}
+
+.invite-filter.is-on {
+    border-color: var(--accent);
+    color: var(--text-primary);
+    background: color-mix(in srgb, var(--accent) 16%, var(--bg-card));
+}
+
+.invite-selected-tray {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    max-height: 92px;
+    overflow: auto;
+    margin-bottom: 8px;
+}
+
+.invite-selected-tray .invite-chip {
+    cursor: pointer;
+}
+
+.invite-server-grid.is-directory {
+    max-height: min(52vh, 460px);
+    gap: 6px;
+}
+
+.invite-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px 4px 4px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: var(--bg-primary);
+}
+
+.invite-row.is-on {
+    border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
+    background: var(--accent-gradient-subtle);
+}
+
+.invite-row.is-on .invite-server-ico {
+    background: var(--accent-gradient);
+    color: #fff;
+    border-color: transparent;
+}
+
+.invite-row.is-disabled {
+    opacity: 0.55;
+}
+
+.invite-row-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.invite-row.is-disabled .invite-row-main {
+    cursor: default;
+}
+
+.invite-row .invite-server-ico {
+    width: 32px;
+    height: 32px;
+    border-radius: 10px;
+}
+
+.invite-row .invite-server-ico .ui-icon {
+    width: 16px;
+    height: 16px;
+}
+
+.invite-row.is-on .invite-server-check {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+}
+
+.invite-row-select {
+    width: 168px;
+    max-width: 42%;
+    flex-shrink: 0;
+    padding: 6px 8px;
+    font-size: 0.78rem;
+}
+
+.invite-pick-grid.is-directory {
+    max-height: min(46vh, 380px);
+    overflow: auto;
+    padding-right: 2px;
+}
+
+.invite-pick-grid.is-directory .invite-choice {
+    padding: 8px 10px;
+}
+
+.invite-pick-grid.is-directory .invite-choice-ico {
+    width: 32px;
+    height: 32px;
+    border-radius: 10px;
+}
+
+.invite-choice-pin {
+    margin-bottom: 8px;
+}
+
+.invite-choice-pin .invite-choice {
+    width: 100%;
+}
+
+@media (max-width: 768px) {
+    .server-grid-compact .server-card {
+        grid-template-columns: 1fr;
+        align-items: stretch;
+    }
+
+    .server-grid-compact .server-protocols {
+        flex-wrap: wrap;
+    }
+
+    .invite-row {
+        flex-wrap: wrap;
+    }
+
+    .invite-row-select {
+        width: 100%;
+        max-width: none;
+    }
+}

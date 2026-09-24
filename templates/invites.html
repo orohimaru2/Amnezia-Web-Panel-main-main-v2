@@ -143,8 +143,15 @@
                 </div>
             </div>
             <div class="form-hint">{{ _('invite_servers_hint') }}</div>
-            <input class="form-input invite-server-search" type="search" id="inviteServerSearch" placeholder="{{ _('invite_servers_search') }}" oninput="filterInviteServers()">
+            <input class="form-input invite-server-search" type="search" id="inviteServerSearch" placeholder="{{ _('servers_search') }}" oninput="filterInviteServers()">
+            <div id="inviteServerFilters" class="invite-filter-row" hidden>
+                <button type="button" class="invite-filter is-on" data-filter="all" onclick="setInviteListFilter('all')">{{ _('invite_filter_all') }}</button>
+                <button type="button" class="invite-filter" data-filter="selected" onclick="setInviteListFilter('selected')">{{ _('invite_filter_selected') }}</button>
+                <button type="button" class="invite-filter" id="inviteShowDisabled" hidden onclick="toggleDisabledServers()"></button>
+            </div>
+            <div id="inviteSelectedTray" class="invite-selected-tray" hidden></div>
             <div id="inviteServerGrid" class="invite-server-grid"></div>
+            <div id="inviteServerEmptyFilter" class="form-hint hidden">{{ _('servers_none_match') }}</div>
         </div>
 
         <div class="form-group">
@@ -184,6 +191,9 @@
     const xuiDefaultInbound = {{ xui_default_inbound | int }};
     const xuiDefaultPanelId = {{ (xui_default_panel_id or '') | tojson }};
     let inviteSelection = {};
+    let inviteListFilter = 'all';
+    let inviteShowNoProtocol = false;
+    const INVITE_DIRECTORY_AT = 30;
     const VPN_PROTO_ORDER = ['awg3', 'awg2', 'awg', 'awg_legacy', 'wireguard', 'xray', 'telemt', 'hysteria', 'naiveproxy', 'mieru'];
         const PROTO_TITLES = {
         awg3: 'AmneziaWG 3.1',
@@ -296,9 +306,151 @@
         };
     }
 
+    function inviteCatalogCount() {
+        return serversData.length + xuiPanels.length;
+    }
+
+    function useInviteDirectory() {
+        return inviteCatalogCount() >= INVITE_DIRECTORY_AT;
+    }
+
+    function fmtShown(shown, total) {
+        return _('servers_shown').replace('{shown}', String(shown)).replace('{total}', String(total));
+    }
+
+    function renderSelectedTray() {
+        const tray = document.getElementById('inviteSelectedTray');
+        if (!tray) return;
+        if (!useInviteDirectory()) {
+            tray.hidden = true;
+            tray.innerHTML = '';
+            return;
+        }
+        const chips = [];
+        serversData.forEach((server, idx) => {
+            const sel = inviteSelection[`ssh:${idx}`];
+            if (!sel) return;
+            const name = server.name || server.host || `Server ${idx + 1}`;
+            chips.push(`<button type="button" class="invite-chip" onclick="toggleInviteServer('ssh:${idx}')">${uiIcon('x')} <span>${escHtml(name)}</span><span class="invite-chip-meta">${escHtml(protoTitle(sel.protocol))}</span></button>`);
+        });
+        xuiPanels.forEach(panel => {
+            const sel = inviteSelection[`xui:${panel.id}`];
+            if (!sel) return;
+            chips.push(`<button type="button" class="invite-chip" onclick="toggleInviteServer('xui:${escHtml(panel.id)}')">${uiIcon('x')} <span>${escHtml(panel.name || '3x-ui')}</span><span class="invite-chip-meta">3x-ui</span></button>`);
+        });
+        tray.hidden = chips.length === 0;
+        tray.innerHTML = chips.join('');
+    }
+
+    function setInviteListFilter(mode) {
+        inviteListFilter = mode === 'selected' ? 'selected' : 'all';
+        document.querySelectorAll('#inviteServerFilters .invite-filter[data-filter]').forEach(btn => {
+            btn.classList.toggle('is-on', btn.getAttribute('data-filter') === inviteListFilter);
+        });
+        filterInviteServers();
+    }
+
+    function toggleDisabledServers() {
+        inviteShowNoProtocol = !inviteShowNoProtocol;
+        renderInviteServerGrid();
+    }
+
+    function renderInviteServerDirectory() {
+        const grid = document.getElementById('inviteServerGrid');
+        const keepScroll = grid.scrollTop;
+        snapshotInbounds();
+        grid.classList.add('is-directory');
+        const filters = document.getElementById('inviteServerFilters');
+        if (filters) filters.hidden = false;
+        document.querySelectorAll('#inviteServerFilters .invite-filter[data-filter]').forEach(btn => {
+            btn.classList.toggle('is-on', btn.getAttribute('data-filter') === inviteListFilter);
+        });
+        const rows = [];
+        const disabled = [];
+        serversData.forEach((server, idx) => {
+            const protos = installedProtocols(server);
+            const key = `ssh:${idx}`;
+            const name = server.name || server.host || `Server ${idx + 1}`;
+            const host = server.host || '';
+            const selected = inviteSelection[key];
+            if (!protos.length) {
+                disabled.push({ key, name, host });
+                return;
+            }
+            const protocol = selected ? resolveProtocol(server, selected.protocol) : protos[0];
+            if (selected) selected.protocol = protocol;
+            const options = [`<option value="aivpn"${protocol === 'aivpn' ? ' selected' : ''}>${escHtml(_('aivpn_protocol_option') || 'AIVPN')}</option>`]
+                .concat(protos.map(p => `<option value="${escHtml(p)}"${p === protocol ? ' selected' : ''}>${escHtml(protoTitle(p))}</option>`));
+            rows.push(`
+                <div class="invite-row${selected ? ' is-on' : ''}" data-server-key="${key}" data-search="${escHtml(`${name} ${host}`)}" data-selected="${selected ? '1' : '0'}">
+                    <button type="button" class="invite-row-main" onclick="toggleInviteServer('${key}')">
+                        <span class="invite-server-check">${uiIcon('check')}</span>
+                        <span class="invite-server-ico">${uiIcon('server')}</span>
+                        <span class="invite-server-copy">
+                            <span class="invite-server-name">${escHtml(name)}</span>
+                            <span class="invite-server-host">${escHtml(host)}</span>
+                        </span>
+                    </button>
+                    ${selected ? `<select class="form-select invite-row-select" onclick="event.stopPropagation()" onchange="setInviteProto('${key}', this.value, event)">${options.join('')}</select>` : ''}
+                </div>`);
+        });
+        xuiPanels.forEach(panel => {
+            const key = `xui:${panel.id}`;
+            const selected = inviteSelection[key];
+            const name = panel.name || '3x-ui';
+            rows.push(`
+                <div class="invite-row${selected ? ' is-on' : ''}" data-server-key="${escHtml(key)}" data-search="${escHtml(name)}" data-selected="${selected ? '1' : '0'}">
+                    <button type="button" class="invite-row-main" onclick="toggleInviteServer('${escHtml(key)}')">
+                        <span class="invite-server-check">${uiIcon('check')}</span>
+                        <span class="invite-server-ico">${uiIcon('layers')}</span>
+                        <span class="invite-server-copy">
+                            <span class="invite-server-name">${escHtml(name)}</span>
+                            <span class="invite-server-host">3x-ui VLESS</span>
+                        </span>
+                    </button>
+                    ${selected ? `<select class="form-select invite-row-select invite-inbound-select" data-inbound-for="${escHtml(panel.id)}" onclick="event.stopPropagation()"></select>` : ''}
+                </div>`);
+        });
+        rows.sort((a, b) => (a.includes('data-selected="1"') === b.includes('data-selected="1"') ? 0 : a.includes('data-selected="1"') ? -1 : 1));
+        if (inviteShowNoProtocol) {
+            disabled.forEach(item => {
+                rows.push(`
+                    <div class="invite-row is-disabled" data-search="${escHtml(`${item.name} ${item.host}`)}" data-disabled="1">
+                        <div class="invite-row-main">
+                            <span class="invite-server-ico">${uiIcon('server')}</span>
+                            <span class="invite-server-copy">
+                                <span class="invite-server-name">${escHtml(item.name)}</span>
+                                <span class="invite-server-host">${escHtml(item.host || _('invite_no_protocol_short'))}</span>
+                            </span>
+                        </div>
+                    </div>`);
+            });
+        }
+        grid.innerHTML = rows.join('') || `<div class="form-hint" style="margin:0;">${escHtml(_('invite_servers_empty'))}</div>`;
+        grid.scrollTop = keepScroll;
+        const disabledBtn = document.getElementById('inviteShowDisabled');
+        if (disabledBtn) {
+            disabledBtn.hidden = disabled.length === 0;
+            disabledBtn.textContent = _('invite_show_disabled').replace('{n}', String(disabled.length));
+            disabledBtn.classList.toggle('is-on', inviteShowNoProtocol);
+        }
+        updateInviteServerCount();
+        renderSelectedTray();
+        filterInviteServers();
+        hydrateXuiInbounds();
+    }
+
     function renderInviteServerGrid() {
         const grid = document.getElementById('inviteServerGrid');
         if (!grid) return;
+        if (useInviteDirectory()) {
+            renderInviteServerDirectory();
+            return;
+        }
+        grid.classList.remove('is-directory');
+        const filters = document.getElementById('inviteServerFilters');
+        if (filters) filters.hidden = true;
+        renderSelectedTray();
         snapshotInbounds();
         const cards = [];
         serversData.forEach((server, idx) => {
@@ -369,10 +521,29 @@
 
     function filterInviteServers() {
         const q = (document.getElementById('inviteServerSearch')?.value || '').trim().toLowerCase();
-        document.querySelectorAll('#inviteServerGrid .invite-server-card').forEach(card => {
+        const items = document.querySelectorAll('#inviteServerGrid .invite-server-card, #inviteServerGrid .invite-row');
+        let shown = 0;
+        items.forEach(card => {
             const hay = (card.getAttribute('data-search') || '').toLowerCase();
-            card.style.display = !q || hay.includes(q) ? '' : 'none';
+            const key = card.getAttribute('data-server-key');
+            const selected = !!(key && inviteSelection[key]);
+            const passQuery = !q || hay.includes(q);
+            const passFilter = inviteListFilter !== 'selected' || selected;
+            const ok = passQuery && passFilter;
+            card.style.display = ok ? '' : 'none';
+            if (ok) shown += 1;
         });
+        const empty = document.getElementById('inviteServerEmptyFilter');
+        if (empty) empty.classList.toggle('hidden', shown !== 0 || !items.length);
+        const count = document.getElementById('inviteServersCount');
+        if (count && useInviteDirectory()) {
+            const selectedCount = Object.keys(inviteSelection).length;
+            const total = items.length;
+            count.textContent = selectedCount
+                ? `${_('invite_servers_selected').replace('{}', String(selectedCount))} · ${fmtShown(shown, total)}`
+                : fmtShown(shown, total);
+            count.classList.toggle('is-empty', !selectedCount);
+        }
     }
 
     function toggleInviteServer(key) {
@@ -550,6 +721,8 @@
         document.getElementById('inviteResetUsedWrap').style.display = 'none';
         const search = document.getElementById('inviteServerSearch');
         if (search) search.value = '';
+        inviteListFilter = 'all';
+        inviteShowNoProtocol = false;
         inviteSelection = {};
         preselectIfSingle();
         renderInviteServerGrid();
@@ -573,6 +746,8 @@
         document.getElementById('inviteResetUsed').checked = false;
         const search = document.getElementById('inviteServerSearch');
         if (search) search.value = '';
+        inviteListFilter = 'all';
+        inviteShowNoProtocol = false;
         selectionFromInvite(inv);
         renderInviteServerGrid();
         openModal('inviteModal');

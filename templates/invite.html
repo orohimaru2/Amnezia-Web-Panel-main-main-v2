@@ -61,7 +61,10 @@
             <div class="invite-pick-head">
                 <div class="invite-pick-title">{{ icon('server') }} <span id="serverPickLabel">{% if (invite.servers or [])|length > 1 %}{{ _('choose_server') }}{% else %}{{ _('server_label') }}{% endif %}</span></div>
             </div>
+            <input id="invitePublicSearch" class="form-input invite-server-search hidden" type="search" placeholder="{{ _('servers_search') }}" oninput="filterPublicServers()" autocomplete="off">
+            <div id="inviteChoicePin" class="invite-choice-pin hidden"></div>
             <div id="inviteServerCards" class="invite-pick-grid"></div>
+            <p id="invitePublicEmpty" class="invite-pick-hint hidden">{{ _('servers_none_match') }}</p>
             <p id="serverPickHint" class="invite-pick-hint {% if (invite.servers or [])|length < 2 %}hidden{% endif %}">{{ _('invite_pick_hint') }}</p>
         </div>
         <p id="noServersMsg" class="invite-pick-hint {% if invite.servers or not invite.available %}hidden{% endif %}">{{ _('invite_no_servers_public') }}</p>
@@ -269,25 +272,57 @@
         }
         wrap.classList.remove('hidden');
         const multi = inviteServers.length > 1;
+        const compact = inviteServers.length >= 30;
         if (label) label.textContent = multi ? _('choose_server') : _('server_label');
-        if (hint) hint.classList.toggle('hidden', !multi);
+        if (hint) hint.classList.toggle('hidden', !multi || compact);
         if (selectedOptionId == null || !inviteServers.some(s => String(s.id) === String(selectedOptionId))) {
             selectedOptionId = inviteServers[0].id;
         }
-        grid.innerHTML = inviteServers.map(s => {
-            const on = String(s.id) === String(selectedOptionId);
-            const base = String(s.protocol || '').split('__')[0];
-            const icon = s.kind === 'xui' ? 'layers' : (PROTO_ICONS[base] || 'server');
-            const meta = [s.protocol_label || protoLabel(s.protocol), s.host].filter(Boolean).join(' · ');
-            return `<button type="button" class="invite-choice${on ? ' is-on' : ''}${multi ? '' : ' is-single'}" onclick="selectInviteServer(${Number(s.id)})">
-                <span class="invite-choice-ico">${typeof uiIcon === 'function' ? uiIcon(icon) : ''}</span>
-                <span class="invite-choice-copy">
-                    <span class="invite-choice-name">${escHtml(s.name)}</span>
-                    <span class="invite-choice-meta">${escHtml(meta)}</span>
-                </span>
-                <span class="invite-choice-check">${typeof uiIcon === 'function' ? uiIcon('check') : ''}</span>
-            </button>`;
-        }).join('');
+        const search = document.getElementById('invitePublicSearch');
+        if (search) search.classList.toggle('hidden', !compact);
+        grid.classList.toggle('is-directory', compact);
+        const selected = inviteServers.find(s => String(s.id) === String(selectedOptionId)) || inviteServers[0];
+        const pin = document.getElementById('inviteChoicePin');
+        if (pin) {
+            pin.classList.toggle('hidden', !compact);
+            pin.innerHTML = compact ? choiceButton(selected, true, true) : '';
+        }
+        grid.innerHTML = inviteServers.map(s => choiceButton(s, String(s.id) === String(selectedOptionId), !multi)).join('');
+        filterPublicServers();
+    }
+
+    function choiceButton(s, on, single) {
+        const base = String(s.protocol || '').split('__')[0];
+        const icon = s.kind === 'xui' ? 'layers' : (PROTO_ICONS[base] || 'server');
+        const meta = [s.protocol_label || protoLabel(s.protocol), s.host].filter(Boolean).join(' · ');
+        const search = escHtml(`${s.name || ''} ${s.host || ''} ${s.protocol_label || ''} ${s.protocol || ''}`);
+        return `<button type="button" class="invite-choice${on ? ' is-on' : ''}${single ? ' is-single' : ''}" data-search="${search}" onclick="selectInviteServer(${Number(s.id)})">
+            <span class="invite-choice-ico">${typeof uiIcon === 'function' ? uiIcon(icon) : ''}</span>
+            <span class="invite-choice-copy">
+                <span class="invite-choice-name">${escHtml(s.name)}</span>
+                <span class="invite-choice-meta">${escHtml(meta)}</span>
+            </span>
+            <span class="invite-choice-check">${typeof uiIcon === 'function' ? uiIcon('check') : ''}</span>
+        </button>`;
+    }
+
+    function filterPublicServers() {
+        const input = document.getElementById('invitePublicSearch');
+        const grid = document.getElementById('inviteServerCards');
+        const empty = document.getElementById('invitePublicEmpty');
+        if (!input || !grid || input.classList.contains('hidden')) {
+            if (empty) empty.classList.add('hidden');
+            return;
+        }
+        const q = input.value.trim().toLowerCase();
+        let shown = 0;
+        grid.querySelectorAll('.invite-choice').forEach(btn => {
+            const hay = (btn.getAttribute('data-search') || '').toLowerCase();
+            const ok = !q || hay.includes(q);
+            btn.style.display = ok ? '' : 'none';
+            if (ok) shown += 1;
+        });
+        if (empty) empty.classList.toggle('hidden', shown !== 0);
     }
 
     async function fetchInviteConfig(connId) {

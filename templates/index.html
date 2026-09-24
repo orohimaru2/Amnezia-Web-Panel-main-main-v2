@@ -14,7 +14,16 @@
     </div>
 
     {% if servers %}
-    <div class="server-grid" id="serverGrid">
+    {% if servers|length >= 30 %}
+    <div class="server-directory-bar">
+        <label class="server-directory-search">
+            {{ icon('search') }}
+            <input id="serverDirectorySearch" type="search" placeholder="{{ _('servers_search') }}" oninput="filterServerDirectory()" autocomplete="off">
+        </label>
+        <span class="invite-count-pill" id="serverDirectoryCount"></span>
+    </div>
+    {% endif %}
+    <div class="server-grid{% if servers|length >= 30 %} server-grid-compact{% endif %}" id="serverGrid">
         {% for server in servers %}
         <div class="card card-hover server-card" id="server-{{ loop.index0 }}" data-idx="{{ loop.index0 }}"
             data-name="{{ server.name }}" data-host="{{ server.host }}" data-port="{{ server.ssh_port }}"
@@ -494,9 +503,39 @@
         });
     }
 
+    function filterServerDirectory() {
+        const input = document.getElementById('serverDirectorySearch');
+        if (!input) return;
+        const q = input.value.trim().toLowerCase();
+        const cards = document.querySelectorAll('#serverGrid .server-card');
+        let shown = 0;
+        cards.forEach(card => {
+            const hay = `${card.dataset.name || ''} ${card.dataset.host || ''}`.toLowerCase();
+            const ok = !q || hay.includes(q);
+            card.classList.toggle('is-filtered-out', !ok);
+            if (ok) shown += 1;
+        });
+        const el = document.getElementById('serverDirectoryCount');
+        if (el) {
+            el.textContent = _('servers_shown').replace('{shown}', String(shown)).replace('{total}', String(cards.length));
+        }
+        let empty = document.getElementById('serverDirectoryEmpty');
+        if (!empty && cards.length) {
+            empty = document.createElement('div');
+            empty.id = 'serverDirectoryEmpty';
+            empty.className = 'server-directory-empty';
+            document.getElementById('serverGrid').after(empty);
+        }
+        if (empty) {
+            empty.textContent = _('servers_none_match');
+            empty.classList.toggle('hidden', shown !== 0);
+        }
+    }
+
     document.addEventListener('DOMContentLoaded', () => {
         startAllPings();
         setupDragAndDrop();
+        filterServerDirectory();
     });
 </script>
 {% endblock %}
