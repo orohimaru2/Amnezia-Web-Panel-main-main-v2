@@ -25,12 +25,13 @@
     {% endif %}
     <div class="server-grid{% if servers|length >= 30 %} server-grid-compact{% endif %}" id="serverGrid">
         {% for server in servers %}
-        <div class="card card-hover server-card" id="server-{{ loop.index0 }}" data-idx="{{ loop.index0 }}"
+        <div class="card card-hover server-card{% if server.rkn_blocked %} is-rkn{% endif %}" id="server-{{ loop.index0 }}" data-idx="{{ loop.index0 }}"
             data-name="{{ server.name }}" data-host="{{ server.host }}" data-port="{{ server.ssh_port }}"
             data-username="{{ server.username }}" data-auth="{{ 'key' if server.private_key else 'password' }}"
             data-ssl-domain="{{ (server.server_info or {}).get('ssl_domain', '') }}"
             data-ssl-email="{{ (server.server_info or {}).get('ssl_email', '') }}"
             data-connect-domain="{{ (server.server_info or {}).get('connect_domain', '') }}"
+            data-rkn-blocked="{{ '1' if server.rkn_blocked else '0' }}"
             draggable="true">
             <div class="server-meta">
                 <div class="server-icon">{{ icon('server') }}</div>
@@ -42,6 +43,9 @@
                         <span class="ping-ms text-muted" id="ping-ms-{{ loop.index0 }}"></span>
                     </div>
                     <div class="server-host">{{ server.host }}:{{ server.ssh_port }}</div>
+                    {% if server.rkn_blocked %}
+                    <div class="rkn-badge" title="{{ _('rkn_blocked_hint') }}">{{ icon('alert') }} {{ _('rkn_blocked_short') }}</div>
+                    {% endif %}
                     {% set connect_domain = (server.server_info or {}).get('connect_domain') %}
                     {% if connect_domain and connect_domain != server.host %}
                     <div class="server-host text-muted" title="{{ _('server_connect_domain_hint') }}">→ {{ connect_domain }}</div>
@@ -169,6 +173,14 @@
                 <input class="form-input" type="email" id="editServerSslEmail" placeholder="admin@example.com">
             </div>
 
+            <label class="rkn-toggle">
+                <input type="checkbox" id="editServerRkn">
+                <span>
+                    <span class="rkn-toggle-title">{{ icon('alert') }} {{ _('rkn_blocked_toggle') }}</span>
+                    <span class="rkn-toggle-hint">{{ _('rkn_blocked_toggle_hint') }}</span>
+                </span>
+            </label>
+
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" onclick="closeModal('editServerModal')">{{ _('cancel')
                     }}</button>
@@ -250,6 +262,14 @@
                 <input class="form-input" type="email" id="serverSslEmail" placeholder="admin@example.com">
             </div>
 
+            <label class="rkn-toggle">
+                <input type="checkbox" id="serverRkn">
+                <span>
+                    <span class="rkn-toggle-title">{{ icon('alert') }} {{ _('rkn_blocked_toggle') }}</span>
+                    <span class="rkn-toggle-hint">{{ _('rkn_blocked_toggle_hint') }}</span>
+                </span>
+            </label>
+
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" onclick="closeModal('addServerModal')">{{ _('cancel')
                     }}</button>
@@ -295,6 +315,7 @@
                 ssl_domain: document.getElementById('serverSslDomain').value.trim(),
                 ssl_email: document.getElementById('serverSslEmail').value.trim(),
                 connect_domain: document.getElementById('serverConnectDomain').value.trim(),
+                rkn_blocked: document.getElementById('serverRkn').checked,
             };
 
             const result = await apiCall('/api/servers/add', 'POST', data);
@@ -346,6 +367,7 @@
         document.getElementById('editServerSslDomain').value = card.dataset.sslDomain || '';
         document.getElementById('editServerSslEmail').value = card.dataset.sslEmail || '';
         document.getElementById('editServerConnectDomain').value = card.dataset.connectDomain || '';
+        document.getElementById('editServerRkn').checked = card.dataset.rknBlocked === '1';
 
         // Pre-select the tab matching the server's current auth method.
         const authIsKey = card.dataset.auth === 'key';
@@ -378,6 +400,7 @@
                 ssl_domain: document.getElementById('editServerSslDomain').value.trim(),
                 ssl_email: document.getElementById('editServerSslEmail').value.trim(),
                 connect_domain: document.getElementById('editServerConnectDomain').value.trim(),
+                rkn_blocked: document.getElementById('editServerRkn').checked,
             };
             await apiCall(`/api/servers/${idx}/edit`, 'POST', body);
             showToast(_('server_saved'), 'success');

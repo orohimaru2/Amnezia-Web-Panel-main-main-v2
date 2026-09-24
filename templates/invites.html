@@ -62,8 +62,8 @@
             {% if inv.servers %}
             <div class="invite-chip-row">
                 {% for s in inv.servers[:4] %}
-                <span class="invite-chip" title="{{ s.protocol_label or s.protocol }}">
-                    {{ icon('layers') if s.kind == 'xui' else icon('server') }}
+                <span class="invite-chip{% if s.rkn_blocked %} is-rkn{% endif %}" title="{{ s.protocol_label or s.protocol }}">
+                    {{ icon('alert') if s.rkn_blocked else (icon('layers') if s.kind == 'xui' else icon('server')) }}
                     <span>{{ s.name }}</span>
                     {% if s.protocol_label %}<span class="invite-chip-meta">{{ s.protocol_label }}</span>{% endif %}
                 </span>
@@ -259,6 +259,11 @@
             .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
+    function rknBadge(server) {
+        if (!server || !server.rkn_blocked) return '';
+        return `<span class="invite-rkn-badge">${uiIcon('alert')} ${escHtml(_('rkn_blocked_short'))}</span>`;
+    }
+
     function installedProtocols(server) {
         const protocols = (server && server.protocols) || {};
         const installed = Object.keys(protocols).filter(k => {
@@ -352,7 +357,7 @@
             const sel = inviteSelection[`ssh:${idx}`];
             if (!sel) return;
             const name = server.name || server.host || `Server ${idx + 1}`;
-            chips.push(`<button type="button" class="invite-chip" onclick="toggleInviteServer('ssh:${idx}')">${uiIcon('x')} <span>${escHtml(name)}</span><span class="invite-chip-meta">${escHtml(protoTitle(sel.protocol))}</span></button>`);
+            chips.push(`<button type="button" class="invite-chip${server.rkn_blocked ? ' is-rkn' : ''}" onclick="toggleInviteServer('ssh:${idx}')">${uiIcon(server.rkn_blocked ? 'alert' : 'x')} <span>${escHtml(name)}</span><span class="invite-chip-meta">${escHtml(protoTitle(sel.protocol))}</span></button>`);
         });
         xuiPanels.forEach(panel => {
             const sel = inviteSelection[`xui:${panel.id}`];
@@ -403,12 +408,12 @@
             const options = [`<option value="aivpn"${protocol === 'aivpn' ? ' selected' : ''}>${escHtml(_('aivpn_protocol_option') || 'AIVPN')}</option>`]
                 .concat(protos.map(p => `<option value="${escHtml(p)}"${p === protocol ? ' selected' : ''}>${escHtml(protoTitle(p))}</option>`));
             rows.push(`
-                <div class="invite-row${selected ? ' is-on' : ''}" data-server-key="${key}" data-search="${escHtml(`${name} ${host}`)}" data-selected="${selected ? '1' : '0'}">
+                <div class="invite-row${selected ? ' is-on' : ''}${server.rkn_blocked ? ' is-rkn' : ''}" data-server-key="${key}" data-search="${escHtml(`${name} ${host}`)}" data-selected="${selected ? '1' : '0'}">
                     <button type="button" class="invite-row-main" onclick="toggleInviteServer('${key}')">
                         <span class="invite-server-check">${uiIcon('check')}</span>
                         <span class="invite-server-ico">${uiIcon('server')}</span>
                         <span class="invite-server-copy">
-                            <span class="invite-server-name">${escHtml(name)}</span>
+                            <span class="invite-server-name">${escHtml(name)} ${rknBadge(server)}</span>
                             <span class="invite-server-host">${escHtml(host)}</span>
                         </span>
                     </button>
@@ -498,11 +503,11 @@
             const chips = [`<button type="button" class="invite-proto-chip${protocol === 'aivpn' ? ' is-on' : ''}" data-proto="aivpn" onclick="setInviteProto('${key}', 'aivpn', event)">${uiIcon('sparkles')} ${escHtml(_('aivpn_protocol_option') || 'AIVPN')}</button>`]
                 .concat(protos.map(p => `<button type="button" class="invite-proto-chip${p === protocol ? ' is-on' : ''}" data-proto="${escHtml(p)}" onclick="setInviteProto('${key}', '${escHtml(p)}', event)">${uiIcon(protoIcon(p))} ${escHtml(protoTitle(p))}</button>`));
             cards.push(`
-                <div class="invite-server-card${selected ? ' is-on' : ''}" role="button" tabindex="0" data-server-key="${key}" data-search="${escHtml(`${name} ${host}`)}" onclick="toggleInviteServer('${key}')" onkeydown="if((event.key==='Enter'||event.key===' ')&&event.target===this){event.preventDefault();toggleInviteServer('${key}')}">
+                <div class="invite-server-card${selected ? ' is-on' : ''}${server.rkn_blocked ? ' is-rkn' : ''}" role="button" tabindex="0" data-server-key="${key}" data-search="${escHtml(`${name} ${host}`)}" onclick="toggleInviteServer('${key}')" onkeydown="if((event.key==='Enter'||event.key===' ')&&event.target===this){event.preventDefault();toggleInviteServer('${key}')}">
                     <div class="invite-server-top">
                         <div class="invite-server-ico">${uiIcon('server')}</div>
                         <div class="invite-server-copy">
-                            <div class="invite-server-name">${escHtml(name)}</div>
+                            <div class="invite-server-name">${escHtml(name)} ${rknBadge(server)}</div>
                             <div class="invite-server-host">${escHtml(host)}</div>
                         </div>
                         <div class="invite-server-check">${uiIcon('check')}</div>

@@ -697,6 +697,62 @@ tail -f /dev/null
 
     # ===================== CLIENT MANAGEMENT =====================
 
+    def _coerce_user_data(self, raw):
+        """Native Amnezia sometimes stores userData as a JSON string."""
+        if isinstance(raw, dict):
+            return raw
+        if isinstance(raw, str) and raw.strip().startswith('{'):
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict):
+                    return parsed
+            except json.JSONDecodeError:
+                pass
+        return {}
+
+    def _key_variants(self, value):
+        text = str(value or '').strip()
+        if not text:
+            return []
+        variants = [text]
+        if ' ' in text:
+            variants.append(text.replace(' ', '+'))
+        if '+' in text:
+            variants.append(text.replace('+', ' '))
+        return variants
+
+    def _same_client_id(self, stored, wanted):
+        return bool(set(self._key_variants(stored)) & set(self._key_variants(wanted)))
+
+    def _client_private_key(self, user_data):
+        ud = self._coerce_user_data(user_data)
+        for key in ('clientPrivateKey', 'privateKey', 'client_private_key'):
+            value = str(ud.get(key) or '').strip()
+            if value:
+                return value
+        return ''
+
+    def _normalize_client_record(self, client):
+        if not isinstance(client, dict):
+            return None
+        ud = self._coerce_user_data(client.get('userData'))
+        if not (ud.get('clientName') or '').strip():
+            ud['clientName'] = ud.get('name') or client.get('clientName') or client.get('name') or ''
+        client = dict(client)
+        client['userData'] = ud
+        return client
+
+    def _find_client_record(self, clients, client_id):
+        for client in clients or []:
+            record = self._normalize_client_record(client)
+            if not record:
+                continue
+            ud = record.get('userData') or {}
+            candidates = [record.get('clientId'), ud.get('publicKey'), ud.get('clientPublicKey'), ud.get('clientId')]
+            if any(self._same_client_id(candidate, client_id) for candidate in candidates):
+                return record
+        return None
+
     def _get_clients_table(self, protocol_type):
         """Get the clients table from the server."""
         container_name = self._container_name(protocol_type)
@@ -705,26 +761,10 @@ tail -f /dev/null
         out, err, code = self.ssh.run_sudo_command(
             f"docker exec -i {container_name} cat {clients_table_path} 2>/dev/null"
         )
-        if code != 0 or not out.strip():
+        parsed = self._parse_clients_table_text(out)
+        if not parsed and code != 0:
             return []
-
-        try:
-            data = json.loads(out)
-            if isinstance(data, list):
-                return data
-            elif isinstance(data, dict):
-                # Migration from old format
-                result = []
-                for client_id, info in data.items():
-                    result.append({
-                        'clientId': client_id,
-                        'userData': {
-                            'clientName': info.get('clientName', 'Unknown'),
-                        }
-                    })
-                return result
-        except json.JSONDecodeError:
-            return []
+        return [c for c in (self._normalize_client_record(item) for item in parsed) if c]
 
     def _save_clients_table(self, protocol_type, clients_table):
         """Save the clients table to the server."""
@@ -1032,13 +1072,19 @@ tail -f /dev/null
             if isinstance(data, dict):
                 result = []
                 for client_id, info in data.items():
+                    if isinstance(info, str):
+                        try:
+                            info = json.loads(info)
+                        except json.JSONDecodeError:
+                            info = {}
                     if not isinstance(info, dict):
                         continue
+                    user_data = dict(info)
+                    if not (user_data.get('clientName') or user_data.get('name')):
+                        user_data['clientName'] = 'Unknown'
                     result.append({
                         'clientId': client_id,
-                        'userData': {
-                            'clientName': info.get('clientName') or info.get('name') or 'Unknown',
-                        },
+                        'userData': user_data,
                     })
                 return result
         except json.JSONDecodeError:
@@ -1094,9 +1140,7 @@ tail -f /dev/null
         for client in clients_table:
             client_id = client.get('clientId', '')
             known_ids.add(client_id)
-            user_data = client.get('userData') or {}
-            if not isinstance(user_data, dict):
-                user_data = {}
+            user_data = self._coerce_user_data(client.get('userData'))
             if not (user_data.get('clientName') or '').strip():
                 user_data['clientName'] = (
                     user_data.get('name')
@@ -1303,22 +1347,39 @@ PersistentKeepalive = 25
     def get_client_config(self, protocol_type, client_id, server_host, port):
         """Reconstruct client config from stored data."""
         clients_table = self._get_clients_table(protocol_type)
-        client = None
-        for c in clients_table:
-            if c.get('clientId') == client_id:
-                client = c
-                break
-
+        client = self._find_client_record(clients_table, client_id)
         if not client:
+            try:
+                snap = self._clients_snapshot(protocol_type)
+                client = self._find_client_record(
+                    self._parse_clients_table_text(snap.get('table')),
+                    client_id,
+                )
+            except Exception:
+                client = None
+        if not client:
+            try:
+                conf_peers = self._parse_peers_from_config(protocol_type)
+            except Exception:
+                conf_peers = {}
+            peer = next((info for key, info in conf_peers.items() if self._same_client_id(key, client_id)), None)
+            if peer:
+                raise RuntimeError(
+                    "Client private key is not stored on the server. "
+                    "This client was created outside the panel, so the config cannot be rebuilt."
+                )
             raise RuntimeError(f"Client {client_id} not found")
 
-        ud = client.get('userData', {})
-        client_priv_key = ud.get('clientPrivateKey', '')
-        client_ip = ud.get('clientIp', '')
+        ud = self._coerce_user_data(client.get('userData'))
+        client_priv_key = self._client_private_key(ud)
+        client_ip = self._client_ip_from_userdata(ud)
         psk = ud.get('psk', '')
 
         if not client_priv_key:
-            raise RuntimeError("Client private key not stored. Config cannot be reconstructed.")
+            raise RuntimeError(
+                "Client private key is not stored on the server. "
+                "This client was created outside the panel, so the config cannot be rebuilt."
+            )
 
         server_pub_key = self._get_server_public_key(protocol_type)
         if not psk:

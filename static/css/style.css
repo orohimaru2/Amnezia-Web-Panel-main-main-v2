@@ -667,6 +667,73 @@ a:hover {
     cursor: grab;
 }
 
+.server-card.is-rkn {
+    border-color: rgba(239, 68, 68, 0.55);
+    box-shadow: inset 3px 0 0 #ef4444;
+}
+
+.rkn-badge,
+.invite-rkn-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 4px;
+    padding: 2px 7px;
+    border-radius: var(--radius-full);
+    border: 1px solid rgba(239, 68, 68, 0.4);
+    background: rgba(239, 68, 68, 0.12);
+    color: #ef4444;
+    font-size: 0.7rem;
+    font-weight: 700;
+    line-height: 1.3;
+    letter-spacing: 0.01em;
+}
+
+.invite-rkn-badge {
+    margin-top: 0;
+    flex-shrink: 0;
+}
+
+.rkn-badge .ui-icon,
+.invite-rkn-badge .ui-icon,
+.invite-rkn-note .ui-icon {
+    width: 12px;
+    height: 12px;
+}
+
+.rkn-toggle {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin: var(--space-md) 0;
+    padding: 12px;
+    border-radius: var(--radius-md);
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    background: rgba(239, 68, 68, 0.08);
+    cursor: pointer;
+}
+
+.rkn-toggle input {
+    margin-top: 3px;
+    accent-color: #ef4444;
+}
+
+.rkn-toggle-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 700;
+    color: #ef4444;
+}
+
+.rkn-toggle-hint {
+    display: block;
+    margin-top: 2px;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    line-height: 1.35;
+}
+
 .server-card:active {
     cursor: grabbing;
 }
@@ -2649,6 +2716,16 @@ body,
     color: var(--accent-light);
 }
 
+.invite-chip.is-rkn {
+    border-color: rgba(239, 68, 68, 0.45);
+    background: rgba(239, 68, 68, 0.1);
+    color: #ef4444;
+}
+
+.invite-chip.is-rkn .ui-icon {
+    color: #ef4444;
+}
+
 .invite-chip-meta {
     color: var(--text-muted);
     font-size: 0.68rem;
@@ -2785,11 +2862,25 @@ body,
 }
 
 .invite-server-name {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
     font-weight: 650;
     font-size: 0.92rem;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+}
+
+.invite-server-card.is-rkn,
+.invite-row.is-rkn {
+    border-color: rgba(239, 68, 68, 0.5);
+    background: rgba(239, 68, 68, 0.06);
+}
+
+.invite-server-card.is-rkn.is-on,
+.invite-row.is-rkn.is-on {
+    border-color: #ef4444;
+    background: rgba(239, 68, 68, 0.1);
+    box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.28);
 }
 
 .invite-server-host {
@@ -2984,6 +3075,42 @@ body,
     border-color: color-mix(in srgb, var(--accent) 75%, var(--border));
     background: var(--accent-gradient-subtle);
     box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.invite-choice.is-rkn,
+.share-card.is-rkn {
+    border-color: rgba(239, 68, 68, 0.55);
+    background: rgba(239, 68, 68, 0.08);
+}
+
+.invite-choice.is-rkn.is-on {
+    border-color: #ef4444;
+    background: rgba(239, 68, 68, 0.12);
+    box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.35);
+}
+
+.invite-choice.is-rkn .invite-choice-ico,
+.invite-choice.is-rkn.is-on .invite-choice-ico,
+.share-card.is-rkn .invite-choice-ico {
+    background: rgba(239, 68, 68, 0.16);
+    color: #ef4444;
+    border-color: rgba(239, 68, 68, 0.35);
+}
+
+.invite-choice.is-rkn.is-on .invite-choice-check {
+    background: #ef4444;
+    border-color: #ef4444;
+}
+
+.invite-rkn-note {
+    display: flex;
+    align-items: flex-start;
+    gap: 4px;
+    margin-top: 4px;
+    color: #ef4444;
+    font-size: 0.75rem;
+    font-weight: 650;
+    line-height: 1.35;
 }
 
 .invite-choice.is-single {

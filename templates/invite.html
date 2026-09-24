@@ -66,6 +66,7 @@
                 <input id="invitePublicSearch" type="search" placeholder="{{ _('servers_search') }}" oninput="filterPublicServers()" autocomplete="off">
             </label>
             <div id="inviteChoicePin" class="invite-choice-pin hidden"></div>
+            <p id="rknViewerBanner" class="invite-status-banner is-danger hidden">{{ icon('alert') }} {{ _('rkn_viewer_banner') }}</p>
             <div id="inviteServerCards" class="invite-pick-grid"></div>
             <p id="invitePublicEmpty" class="invite-pick-hint hidden">{{ _('servers_none_match') }}</p>
             <p id="serverPickHint" class="invite-pick-hint {% if (invite.servers or [])|length < 2 %}hidden{% endif %}">{{ _('invite_pick_hint') }}</p>
@@ -300,6 +301,31 @@
         }
         grid.innerHTML = inviteServers.map(s => choiceButton(s, String(s.id) === String(selectedOptionId), !multi)).join('');
         filterPublicServers();
+        updateRknBanner();
+    }
+
+    function viewerInRussia() {
+        const zones = new Set([
+            'Europe/Kaliningrad', 'Europe/Moscow', 'Europe/Simferopol', 'Europe/Kirov',
+            'Europe/Volgograd', 'Europe/Astrakhan', 'Europe/Saratov', 'Europe/Ulyanovsk',
+            'Europe/Samara', 'Asia/Yekaterinburg', 'Asia/Omsk', 'Asia/Novosibirsk',
+            'Asia/Barnaul', 'Asia/Tomsk', 'Asia/Novokuznetsk', 'Asia/Krasnoyarsk',
+            'Asia/Irkutsk', 'Asia/Chita', 'Asia/Yakutsk', 'Asia/Khandyga',
+            'Asia/Vladivostok', 'Asia/Ust-Nera', 'Asia/Magadan', 'Asia/Sakhalin',
+            'Asia/Srednekolymsk', 'Asia/Kamchatka', 'Asia/Anadyr',
+        ]);
+        try {
+            return zones.has(Intl.DateTimeFormat().resolvedOptions().timeZone || '');
+        } catch {
+            return false;
+        }
+    }
+
+    function updateRknBanner() {
+        const banner = document.getElementById('rknViewerBanner');
+        if (!banner) return;
+        const blocked = inviteServers.some(s => s.rkn_blocked);
+        banner.classList.toggle('hidden', !(blocked && viewerInRussia()));
     }
 
     function choiceButton(s, on, single) {
@@ -307,11 +333,14 @@
         const icon = s.kind === 'xui' ? 'layers' : (PROTO_ICONS[base] || 'server');
         const meta = [s.protocol_label || protoLabel(s.protocol), s.host].filter(Boolean).join(' · ');
         const search = escHtml(`${s.name || ''} ${s.host || ''} ${s.protocol_label || ''} ${s.protocol || ''}`);
-        return `<button type="button" class="invite-choice${on ? ' is-on' : ''}${single ? ' is-single' : ''}" data-search="${search}" onclick="selectInviteServer(${Number(s.id)})">
+        const rkn = s.rkn_blocked ? `
+            <span class="invite-rkn-note">${typeof uiIcon === 'function' ? uiIcon('alert') : ''} ${escHtml(_('rkn_blocked_short'))}. ${escHtml(_('rkn_blocked_hint'))}</span>` : '';
+        return `<button type="button" class="invite-choice${on ? ' is-on' : ''}${single ? ' is-single' : ''}${s.rkn_blocked ? ' is-rkn' : ''}" data-search="${search}" onclick="selectInviteServer(${Number(s.id)})">
             <span class="invite-choice-ico">${typeof uiIcon === 'function' ? uiIcon(icon) : ''}</span>
             <span class="invite-choice-copy">
                 <span class="invite-choice-name">${escHtml(s.name)}</span>
                 <span class="invite-choice-meta">${escHtml(meta)}</span>
+                ${rkn}
             </span>
             <span class="invite-choice-check">${typeof uiIcon === 'function' ? uiIcon('check') : ''}</span>
         </button>`;
@@ -368,13 +397,15 @@
             grid.innerHTML = data.connections.map(c => {
                 const base = String(c.protocol || '').split('__')[0];
                 const iconName = base === 'xui' ? 'layers' : (PROTO_ICONS[base] || 'server');
+                const rkn = c.rkn_blocked ? `<div class="invite-rkn-note">${typeof uiIcon === 'function' ? uiIcon('alert') : ''} ${escHtml(_('rkn_blocked_short'))}. ${escHtml(_('rkn_blocked_hint'))}</div>` : '';
                 return `
-                <article class="share-card" data-conn-id="${escHtml(c.id)}">
+                <article class="share-card${c.rkn_blocked ? ' is-rkn' : ''}" data-conn-id="${escHtml(c.id)}">
                     <div class="share-card-top">
                         <span class="invite-choice-ico">${typeof uiIcon === 'function' ? uiIcon(iconName) : ''}</span>
                         <div style="min-width:0; flex:1;">
                             <div class="share-card-name">${escHtml(c.name)}</div>
                             <div class="share-card-meta">${escHtml(protoLabel(c.protocol))} · ${escHtml(c.server_name || '')}</div>
+                            ${rkn}
                         </div>
                         <span class="badge badge-success share-badge">${_('active')}</span>
                     </div>

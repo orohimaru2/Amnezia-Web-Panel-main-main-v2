@@ -1337,6 +1337,57 @@ def _manager_call(manager, method, protocol, *args, **kwargs):
     return fn(protocol, *args, **kwargs)
 
 
+_WG_CONFIG_BASES = {'awg', 'awg2', 'awg3', 'awg_legacy', 'wireguard'}
+
+
+def _config_protocol_candidates(server: dict, protocol: str) -> list:
+    """Requested protocol first, then other installed WireGuard-family protocols."""
+    ordered = []
+
+    def add(key):
+        if key and key not in ordered:
+            ordered.append(key)
+
+    add(protocol)
+    if protocol_base(protocol) not in _WG_CONFIG_BASES:
+        return ordered
+    for key, info in (server.get('protocols') or {}).items():
+        if isinstance(info, dict) and info.get('installed') and protocol_base(key) in _WG_CONFIG_BASES:
+            add(key)
+    return ordered
+
+
+def _read_client_config(ssh, server: dict, protocol: str, client_id: str, port):
+    """Rebuild a client config, including a client stored under another WG protocol on this server."""
+    last_missing = None
+    for proto in _config_protocol_candidates(server, protocol):
+        proto_info = (server.get('protocols') or {}).get(proto) or {}
+        proto_port = proto_info.get('port') or port
+        manager = get_protocol_manager(ssh, proto)
+        try:
+            return _manager_call(
+                manager, 'get_client_config', proto, client_id,
+                get_server_connect_host(server, proto), proto_port,
+            )
+        except RuntimeError as exc:
+            if 'not found' in str(exc).lower():
+                last_missing = exc
+                continue
+            raise
+    if last_missing:
+        raise last_missing
+    raise RuntimeError(f'Client {client_id} not found')
+
+
+def _config_unavailable_response(exc: Exception, server_id):
+    text = str(exc)
+    lowered = text.lower()
+    if 'not found' in lowered or 'private key' in lowered:
+        logger.warning("Connection config unavailable on server %s: %s", server_id, text)
+        return JSONResponse({'error': text}, status_code=404)
+    return None
+
+
 # Protocols that own VPN clients (can list/link connections)
 CLIENT_VPN_BASES = {'awg', 'awg2', 'awg3', 'awg_legacy', 'xray', 'telemt', 'wireguard', 'hysteria', 'naiveproxy', 'mieru', 'xui'}
 
@@ -2211,6 +2262,7 @@ class AddServerRequest(BaseModel):
     ssl_domain: str = ''
     ssl_email: str = ''
     connect_domain: str = ''
+    rkn_blocked: bool = False
 
 
 class EditServerRequest(BaseModel):
@@ -2226,6 +2278,7 @@ class EditServerRequest(BaseModel):
     ssl_domain: Optional[str] = None
     ssl_email: Optional[str] = None
     connect_domain: Optional[str] = None
+    rkn_blocked: Optional[bool] = None
 
 
 class ConnectDomainRequest(BaseModel):
@@ -3150,6 +3203,7 @@ def _public_vpn_server_view(server: dict, server_id: int) -> dict:
         'auth': 'key' if server.get('private_key') else 'password',
         'has_password': bool(server.get('password')),
         'has_private_key': bool(server.get('private_key')),
+        'rkn_blocked': bool(server.get('rkn_blocked')),
         'server_info': server_info,
         'protocols': protocols,
     }
@@ -3201,6 +3255,7 @@ async def api_add_server(request: Request, req: AddServerRequest):
             'username': username, 'password': req.password,
             'private_key': req.private_key, 'server_info': server_info,
             'protocols': {},
+            'rkn_blocked': bool(req.rkn_blocked),
         }
         ssl_domain = (req.ssl_domain or '').strip().lower()
         ssl_email = (req.ssl_email or '').strip()
@@ -3296,6 +3351,8 @@ async def api_edit_server(request: Request, server_id: int, req: EditServerReque
                 info['connect_domain'] = domain
             else:
                 info.pop('connect_domain', None)
+        if req.rkn_blocked is not None:
+            server['rkn_blocked'] = bool(req.rkn_blocked)
         server['server_info'] = info
         save_data(data)
         return {'status': 'success', 'server_info': info}
@@ -5230,11 +5287,18 @@ async def api_get_connection_config(request: Request, server_id: int, req: Conne
         port = proto_info.get('port', '55424')
         ssh = get_ssh(server)
         ssh.connect()
-        manager = get_protocol_manager(ssh, req.protocol)
-        config = _manager_call(manager, 'get_client_config', req.protocol, req.client_id, get_server_connect_host(server, req.protocol), port)
-        ssh.disconnect()
+        try:
+            config = _read_client_config(ssh, server, req.protocol, req.client_id, port)
+        finally:
+            ssh.disconnect()
         vpn_link = generate_vpn_link(config) if config else ''
         return {'config': config, 'vpn_link': vpn_link}
+    except RuntimeError as e:
+        unavailable = _config_unavailable_response(e, server_id)
+        if unavailable:
+            return unavailable
+        logger.exception("Error getting connection config")
+        return JSONResponse({'error': str(e)}, status_code=500)
     except Exception as e:
         logger.exception("Error getting connection config")
         return JSONResponse({'error': str(e)}, status_code=500)
@@ -6394,6 +6458,7 @@ def _invite_choices(link: dict, data: Optional[dict]) -> list:
             'protocol_label': _invite_proto_label(protocol),
             'xui_panel_id': '',
             'xui_inbound_id': 0,
+            'rkn_blocked': bool(server.get('rkn_blocked')),
         })
     return out
 
@@ -6512,6 +6577,7 @@ def _enrich_invite_conn(c: dict, data: dict) -> dict:
         if sid < len(data.get('servers') or []):
             srv = data['servers'][sid]
             out['server_name'] = srv.get('name') or srv.get('host') or ''
+            out['rkn_blocked'] = bool(srv.get('rkn_blocked'))
         else:
             out['server_name'] = 'Unknown'
     return out
@@ -6544,10 +6610,8 @@ async def _fetch_connection_config_payload(data: dict, conn: dict, expires_at: O
     ssh = get_ssh(server)
     await asyncio.to_thread(ssh.connect)
     try:
-        manager = get_protocol_manager(ssh, protocol)
         config = await asyncio.to_thread(
-            _manager_call, manager, 'get_client_config',
-            protocol, conn['client_id'], get_server_connect_host(server, protocol), port,
+            _read_client_config, ssh, server, protocol, conn['client_id'], port,
         )
     finally:
         await asyncio.to_thread(ssh.disconnect)
