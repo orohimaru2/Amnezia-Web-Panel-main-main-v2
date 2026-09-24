@@ -264,6 +264,8 @@
     "invite_delete_config":  "حذف پیکربندی",
     "invite_delete_config_confirm":  "این پیکربندی حذف شود؟ یک استفاده برمی‌گردد تا بتوانید سرور دیگری انتخاب کنید.",
     "invite_config_deleted":  "پیکربندی حذف شد",
+    "invite_my_configs":  "پیکربندی‌های شما",
+    "invite_open":  "باز کردن",
     "invite_public_title":  "دعوت",
     "invite_public_subtitle":  "دریافت کانفیگ VPN با لینک دعوت",
     "invite_protected_desc":  "این لینک با رمز محافظت شده است.",

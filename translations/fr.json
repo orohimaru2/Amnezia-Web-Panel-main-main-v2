@@ -264,6 +264,8 @@
     "invite_delete_config":  "Supprimer la config",
     "invite_delete_config_confirm":  "Supprimer cette config ? L'utilisation est rendue : vous pourrez en obtenir une sur un autre serveur.",
     "invite_config_deleted":  "Config supprimée",
+    "invite_my_configs":  "Vos configs",
+    "invite_open":  "Ouvrir",
     "invite_public_title":  "Invitation",
     "invite_public_subtitle":  "Obtenir une config VPN via invitation",
     "invite_protected_desc":  "Lien protégé par mot de passe.",

@@ -10,7 +10,7 @@
         <h1 class="share-title">{{ invite.name }}</h1>
         <p class="share-user">{{ _('invite_public_subtitle') }}</p>
         {% if not need_password %}
-        <p class="share-hint">{{ _('share_copy_hint') }}</p>
+        <p class="share-hint">{{ icon('info') }} {{ _('share_copy_hint') }}</p>
         {% endif %}
     </header>
 
@@ -21,7 +21,7 @@
         <form id="authForm" onsubmit="authInvite(event)" class="share-auth-form">
             <input type="password" id="invitePassword" class="form-input" placeholder="{{ _('password') }}" required autofocus>
             <button type="submit" class="btn btn-primary share-btn-lg" id="authBtn">
-                <span id="authBtnText">{{ _('login') }}</span>
+                <span id="authBtnText">{{ icon('lock') }} {{ _('login') }}</span>
                 <div class="spinner hidden" id="authSpinner"></div>
             </button>
         </form>
@@ -48,7 +48,7 @@
         </div>
     </div>
 
-    <p id="statusHint" style="text-align:center; color:var(--text-muted); font-size:0.88rem; margin:0 0 var(--space-md);">
+    <p id="statusHint" class="invite-status-note">
         {% if invite.duration_days %}
         {{ _('invite_duration_starts_hint').replace('{}', invite.duration_days|string) }}
         {% else %}
@@ -61,7 +61,10 @@
             <div class="invite-pick-head">
                 <div class="invite-pick-title">{{ icon('server') }} <span id="serverPickLabel">{% if (invite.servers or [])|length > 1 %}{{ _('choose_server') }}{% else %}{{ _('server_label') }}{% endif %}</span></div>
             </div>
-            <input id="invitePublicSearch" class="form-input invite-server-search hidden" type="search" placeholder="{{ _('servers_search') }}" oninput="filterPublicServers()" autocomplete="off">
+            <label id="invitePublicSearchWrap" class="server-directory-search invite-public-search hidden">
+                {{ icon('search') }}
+                <input id="invitePublicSearch" type="search" placeholder="{{ _('servers_search') }}" oninput="filterPublicServers()" autocomplete="off">
+            </label>
             <div id="inviteChoicePin" class="invite-choice-pin hidden"></div>
             <div id="inviteServerCards" class="invite-pick-grid"></div>
             <p id="invitePublicEmpty" class="invite-pick-hint hidden">{{ _('servers_none_match') }}</p>
@@ -73,8 +76,13 @@
             <div class="spinner hidden" id="createSpinner" style="width:14px;height:14px;"></div>
         </button>
     </div>
-    <p id="exhaustedMsg" style="text-align:center; color:#ef4444; margin:0 0 var(--space-md); {% if invite.available or not invite.exhausted %}display:none;{% endif %}">{{ _('invite_exhausted') }}</p>
-    <p id="disabledMsg" style="text-align:center; color:#ef4444; margin:0 0 var(--space-md); {% if invite.available or invite.exhausted %}display:none;{% endif %}">{{ _('disabled') }}</p>
+    <p id="exhaustedMsg" class="invite-status-banner is-danger" {% if invite.available or not invite.exhausted %}style="display:none;"{% endif %}>{{ icon('alert') }} {{ _('invite_exhausted') }}</p>
+    <p id="disabledMsg" class="invite-status-banner is-danger" {% if invite.available or invite.exhausted %}style="display:none;"{% endif %}>{{ icon('pause') }} {{ _('disabled') }}</p>
+
+    <div class="invite-configs-head">
+        {{ icon('key') }}
+        <span>{{ _('invite_my_configs') }}</span>
+    </div>
 
     <div class="share-loading" id="loadingState" style="margin-top:var(--space-lg);">
         <div class="spinner share-spinner"></div>
@@ -82,6 +90,7 @@
     </div>
     <div id="connectionsGrid" class="share-grid hidden"></div>
     <div id="emptyState" class="share-empty hidden">
+        <div class="share-empty-ico">{{ icon('file') }}</div>
         <p>{{ _('invite_no_saved_configs') }}</p>
     </div>
     {% endif %}
@@ -104,8 +113,8 @@
                 <p class="share-qr-caption">{{ _('qr_code_tab') }}</p>
             </div>
             <div class="share-extra">
-                <button type="button" class="btn btn-secondary w-full" id="downloadBtn">{{ _('download_config_file') }}</button>
-                <button type="button" class="share-link-btn" onclick="toggleConfigText()">{{ _('show_config_text') }}</button>
+                <button type="button" class="btn btn-secondary w-full" id="downloadBtn">{{ icon('file') }} {{ _('download_config_file') }}</button>
+                <button type="button" class="share-link-btn" onclick="toggleConfigText()">{{ icon('file') }} {{ _('show_config_text') }}</button>
                 <textarea class="config-text share-config-text hidden" id="configText" readonly rows="8"></textarea>
             </div>
         </div>
@@ -278,8 +287,10 @@
         if (selectedOptionId == null || !inviteServers.some(s => String(s.id) === String(selectedOptionId))) {
             selectedOptionId = inviteServers[0].id;
         }
+        const searchWrap = document.getElementById('invitePublicSearchWrap');
         const search = document.getElementById('invitePublicSearch');
-        if (search) search.classList.toggle('hidden', !compact);
+        if (searchWrap) searchWrap.classList.toggle('hidden', !compact);
+        else if (search) search.classList.toggle('hidden', !compact);
         grid.classList.toggle('is-directory', compact);
         const selected = inviteServers.find(s => String(s.id) === String(selectedOptionId)) || inviteServers[0];
         const pin = document.getElementById('inviteChoicePin');
@@ -308,9 +319,11 @@
 
     function filterPublicServers() {
         const input = document.getElementById('invitePublicSearch');
+        const wrap = document.getElementById('invitePublicSearchWrap');
         const grid = document.getElementById('inviteServerCards');
         const empty = document.getElementById('invitePublicEmpty');
-        if (!input || !grid || input.classList.contains('hidden')) {
+        const searchHidden = wrap ? wrap.classList.contains('hidden') : !input || input.classList.contains('hidden');
+        if (!input || !grid || searchHidden) {
             if (empty) empty.classList.add('hidden');
             return;
         }
@@ -352,10 +365,14 @@
             }
             empty.classList.add('hidden');
             grid.classList.remove('hidden');
-            grid.innerHTML = data.connections.map(c => `
+            grid.innerHTML = data.connections.map(c => {
+                const base = String(c.protocol || '').split('__')[0];
+                const iconName = base === 'xui' ? 'layers' : (PROTO_ICONS[base] || 'server');
+                return `
                 <article class="share-card" data-conn-id="${escHtml(c.id)}">
                     <div class="share-card-top">
-                        <div>
+                        <span class="invite-choice-ico">${typeof uiIcon === 'function' ? uiIcon(iconName) : ''}</span>
+                        <div style="min-width:0; flex:1;">
                             <div class="share-card-name">${escHtml(c.name)}</div>
                             <div class="share-card-meta">${escHtml(protoLabel(c.protocol))} · ${escHtml(c.server_name || '')}</div>
                         </div>
@@ -363,22 +380,23 @@
                     </div>
                     <button type="button" class="btn btn-primary share-btn-lg share-copy-btn"
                         onclick="copyKeyFromCard(this, '${escAttr(c.id)}')">
-                        ${typeof uiIcon === 'function' ? uiIcon('copy') : '📋'}
+                        ${typeof uiIcon === 'function' ? uiIcon('copy') : ''}
                         <span class="share-copy-label">${_('copy_key_big')}</span>
                     </button>
-                    <div class="share-card-links">
-                        <button type="button" class="share-link-btn"
+                    <div class="share-card-actions">
+                        <button type="button" class="btn btn-secondary btn-sm"
                             onclick="showDetails('${escAttr(c.id)}', '${escAttr(c.name)}')">
+                            ${typeof uiIcon === 'function' ? uiIcon('file') : ''}
                             ${_('more_qr_download')}
                         </button>
-                        <button type="button" class="share-link-btn share-delete-btn"
+                        <button type="button" class="btn btn-danger btn-sm"
                             onclick="deleteInviteConfig('${escAttr(c.id)}')">
                             ${typeof uiIcon === 'function' ? uiIcon('trash') : ''}
                             ${_('invite_delete_config')}
                         </button>
                     </div>
-                </article>
-            `).join('');
+                </article>`;
+            }).join('');
         } catch (err) {
             console.error(err);
             loading.classList.add('hidden');
@@ -470,23 +488,32 @@
 </script>
 
 <style>
-    .share-page { max-width: 440px; margin: 1.25rem auto 2.5rem; padding: 0 var(--space-md); }
+    .share-page { max-width: 460px; margin: 1.25rem auto 2.5rem; padding: 0 var(--space-md); }
     .share-hero { text-align: center; margin-bottom: var(--space-lg); }
     .share-title { font-size: 1.75rem; font-weight: 700; letter-spacing: -0.02em; margin: 0 0 var(--space-xs); }
     .share-user { color: var(--text-muted); font-size: 0.95rem; margin: 0 0 var(--space-sm); }
     .share-hint {
-        margin: 0 auto; max-width: 22rem; padding: 0.75rem 1rem; border-radius: 12px;
-        background: var(--accent-glow); color: var(--text-primary); font-size: 0.95rem; line-height: 1.4;
+        display: flex; align-items: flex-start; gap: 8px; text-align: left;
+        margin: 0 auto; max-width: 24rem; padding: 0.75rem 1rem; border-radius: 12px;
+        background: var(--accent-glow); color: var(--text-primary); font-size: 0.92rem; line-height: 1.4;
         border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
     }
-    .share-grid { display: flex; flex-direction: column; gap: var(--space-md); margin-top: var(--space-lg); }
+    .share-hint .ui-icon { margin-top: 2px; color: var(--accent-light); flex-shrink: 0; }
+    .share-grid { display: flex; flex-direction: column; gap: var(--space-md); margin-top: 0; }
     .share-card {
         background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg);
         padding: var(--space-md); display: flex; flex-direction: column; gap: var(--space-sm);
     }
-    .share-card-top { display: flex; justify-content: space-between; gap: var(--space-sm); align-items: flex-start; }
-    .share-card-name { font-weight: 600; }
+    .share-card-top { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+    .share-card-name { font-weight: 650; }
     .share-card-meta { font-size: 0.8rem; color: var(--text-muted); margin-top: 2px; }
+    .share-card-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .share-card-actions .btn { width: 100%; justify-content: center; }
+    .share-empty-ico {
+        width: 44px; height: 44px; margin: 0 auto 8px; border-radius: 14px;
+        display: grid; place-items: center;
+        background: var(--accent-gradient-subtle); color: var(--accent-light);
+    }
     .share-btn-lg { width: 100%; justify-content: center; min-height: 48px; }
     .share-card-links { display: flex; align-items: center; justify-content: space-between; gap: var(--space-sm); }
     .share-link-btn {

@@ -275,6 +275,8 @@
     "invite_delete_config":  "Delete config",
     "invite_delete_config_confirm":  "Delete this config? The use is returned so you can get a config on another server.",
     "invite_config_deleted":  "Config deleted",
+    "invite_my_configs":  "Your configs",
+    "invite_open":  "Open",
     "invite_public_title":  "Invite",
     "invite_public_subtitle":  "Get a VPN config via invite link",
     "invite_protected_desc":  "This invite link is password protected.",

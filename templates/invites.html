@@ -19,13 +19,11 @@
     </div>
 
     {% if not xui_has_sub_url and xui_configured %}
-    <div class="card" style="margin-bottom:var(--space-lg); border-color: rgba(245, 158, 11, 0.35); background: rgba(245, 158, 11, 0.06);">
-        <div style="display:flex; gap:var(--space-md); align-items:flex-start;">
-            <div style="font-size:1.4rem;">⚠️</div>
-            <div>
-                <div style="font-weight:600; margin-bottom:4px;">{{ _('invite_sub_url_missing_title') }}</div>
-                <div class="form-hint" style="margin:0;">{{ _('invite_sub_url_missing_hint') }}</div>
-            </div>
+    <div class="invite-status-banner is-warn" style="margin-bottom:var(--space-lg);">
+        {{ icon('alert') }}
+        <div>
+            <div style="font-weight:650;">{{ _('invite_sub_url_missing_title') }}</div>
+            <div class="form-hint" style="margin:2px 0 0;">{{ _('invite_sub_url_missing_hint') }}</div>
         </div>
     </div>
     {% endif %}
@@ -39,17 +37,26 @@
     <div id="invitesGrid" style="display:{% if invites %}grid{% else %}none{% endif %}; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: var(--space-md);">
         {% for inv in invites %}
         <div class="card invite-card invite-admin-card" id="invite-{{ inv.id }}" style="padding:var(--space-md); {% if not inv.enabled %}opacity:0.55;{% endif %}">
-            <div style="display:flex; justify-content:space-between; gap:var(--space-sm); align-items:flex-start; margin-bottom:var(--space-sm);">
-                <div>
-                    <div style="font-weight:700; font-size:1.05rem;">{{ inv.name }}</div>
+            <div class="invite-admin-head">
+                <div class="invite-admin-title">
+                    <span class="invite-server-ico">{{ icon('link') }}</span>
+                    <div style="min-width:0;">
+                        <div class="invite-admin-name">{{ inv.name }}</div>
+                        {% if inv.note %}<div class="invite-admin-note" title="{{ inv.note }}">{{ inv.note }}</div>{% endif %}
+                    </div>
                 </div>
-                {% if inv.available %}
-                <span class="badge badge-success">{{ _('invite_active') }}</span>
-                {% elif inv.exhausted %}
-                <span class="badge badge-warn">{{ _('invite_exhausted') }}</span>
-                {% else %}
-                <span class="badge badge-secondary">{{ _('disabled') }}</span>
-                {% endif %}
+                <div style="display:flex; gap:6px; align-items:center; flex-shrink:0;">
+                    {% if inv.has_password %}
+                    <span class="invite-chip" title="{{ _('password') }}">{{ icon('lock') }}</span>
+                    {% endif %}
+                    {% if inv.available %}
+                    <span class="badge badge-success">{{ _('invite_active') }}</span>
+                    {% elif inv.exhausted %}
+                    <span class="badge badge-warn">{{ _('invite_exhausted') }}</span>
+                    {% else %}
+                    <span class="badge badge-secondary">{{ _('disabled') }}</span>
+                    {% endif %}
+                </div>
             </div>
 
             {% if inv.servers %}
@@ -67,23 +74,30 @@
             </div>
             {% endif %}
 
-            <div style="display:grid; grid-template-columns:1fr 1fr; gap:var(--space-sm); margin-bottom:var(--space-md);">
-                <div style="background:var(--bg-primary); border-radius:var(--radius-md); padding:var(--space-sm);">
-                    <div style="font-size:0.7rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.04em;">{{ _('invite_uses') }}</div>
-                    <div style="font-weight:700; margin-top:2px;">
-                        {% if inv.unlimited %}{{ inv.used_count }} / ∞{% else %}{{ inv.used_count }} / {{ inv.max_uses }}{% endif %}
+            <div class="invite-stat-row">
+                <div class="invite-stat">
+                    <div class="invite-stat-ico">{{ icon('key') }}</div>
+                    <div>
+                        <div class="invite-stat-label">{{ _('invite_uses') }}</div>
+                        <div class="invite-stat-value">
+                            {% if inv.unlimited %}{{ inv.used_count }} / ∞{% else %}{{ inv.used_count }} / {{ inv.max_uses }}{% endif %}
+                        </div>
                     </div>
                 </div>
-                <div style="background:var(--bg-primary); border-radius:var(--radius-md); padding:var(--space-sm);">
-                    <div style="font-size:0.7rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.04em;">{{ _('invite_duration_short') }}</div>
-                    <div style="font-weight:700; margin-top:2px;">
-                        {% if inv.duration_days %}{{ inv.duration_days }} {{ _('days_short') }}{% else %}∞{% endif %}
+                <div class="invite-stat">
+                    <div class="invite-stat-ico">{{ icon('sparkles') }}</div>
+                    <div>
+                        <div class="invite-stat-label">{{ _('invite_duration_short') }}</div>
+                        <div class="invite-stat-value">
+                            {% if inv.duration_days %}{{ inv.duration_days }} {{ _('days_short') }}{% else %}∞{% endif %}
+                        </div>
                     </div>
                 </div>
             </div>
 
-            <div style="display:flex; gap:var(--space-xs); flex-wrap:wrap;">
+            <div class="invite-admin-actions">
                 <button class="btn btn-primary btn-sm" onclick="copyInviteUrl('{{ inv.token }}')">{{ icon('copy') }} {{ _('copy') }}</button>
+                <button class="btn btn-secondary btn-sm btn-icon" onclick="openInviteUrl('{{ inv.token }}')" title="{{ _('invite_open') }}">{{ icon('share') }}</button>
                 <button class="btn btn-secondary btn-sm btn-icon" onclick="editInvite('{{ inv.id }}')" title="{{ _('edit') }}">{{ icon('pencil') }}</button>
                 <button class="btn btn-secondary btn-sm btn-icon" onclick="toggleInvite('{{ inv.id }}', {{ 'false' if inv.enabled else 'true' }})" title="{% if inv.enabled %}{{ _('disabled') }}{% else %}{{ _('invite_active') }}{% endif %}">
                     {% if inv.enabled %}{{ icon('pause') }}{% else %}{{ icon('play') }}{% endif %}
@@ -105,25 +119,25 @@
         <input type="hidden" id="inviteEditId" value="">
 
         <div class="form-group">
-            <label class="form-label">{{ _('invite_name_label') }}</label>
+            <label class="form-label invite-label">{{ icon('pencil') }} {{ _('invite_name_label') }}</label>
             <input class="form-input" type="text" id="inviteName" placeholder="Promo / Friends">
         </div>
 
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:var(--space-md);">
             <div class="form-group">
-                <label class="form-label">{{ _('invite_max_uses_label') }}</label>
+                <label class="form-label invite-label">{{ icon('key') }} {{ _('invite_max_uses_label') }}</label>
                 <input class="form-input" type="number" id="inviteMaxUses" min="0" value="1">
                 <div class="form-hint">{{ _('invite_max_uses_hint') }}</div>
             </div>
             <div class="form-group">
-                <label class="form-label">{{ _('invite_duration_label') }}</label>
+                <label class="form-label invite-label">{{ icon('sparkles') }} {{ _('invite_duration_label') }}</label>
                 <input class="form-input" type="number" id="inviteDurationDays" min="0" value="0">
                 <div class="form-hint">{{ _('invite_duration_hint') }}</div>
             </div>
         </div>
 
         <div class="form-group">
-            <label class="form-label">{{ _('invite_user_label') }}</label>
+            <label class="form-label invite-label">{{ icon('user') }} {{ _('invite_user_label') }}</label>
             <select class="form-select" id="inviteUserId">
                 <option value="">{{ _('guest_user_none') }}</option>
                 {% for u in users %}
@@ -143,7 +157,10 @@
                 </div>
             </div>
             <div class="form-hint">{{ _('invite_servers_hint') }}</div>
-            <input class="form-input invite-server-search" type="search" id="inviteServerSearch" placeholder="{{ _('servers_search') }}" oninput="filterInviteServers()">
+            <label class="server-directory-search invite-server-search">
+                {{ icon('search') }}
+                <input type="search" id="inviteServerSearch" placeholder="{{ _('servers_search') }}" oninput="filterInviteServers()" autocomplete="off">
+            </label>
             <div id="inviteServerFilters" class="invite-filter-row" hidden>
                 <button type="button" class="invite-filter is-on" data-filter="all" onclick="setInviteListFilter('all')">{{ _('invite_filter_all') }}</button>
                 <button type="button" class="invite-filter" data-filter="selected" onclick="setInviteListFilter('selected')">{{ _('invite_filter_selected') }}</button>
@@ -155,7 +172,7 @@
         </div>
 
         <div class="form-group">
-            <label class="form-label">{{ _('invite_password_label') }}</label>
+            <label class="form-label invite-label">{{ icon('lock') }} {{ _('invite_password_label') }}</label>
             <input class="form-input" type="password" id="invitePassword" placeholder="{{ _('share_password_hint') }}" autocomplete="new-password">
             <label style="display:none; align-items:center; gap:var(--space-sm); margin-top:var(--space-xs); cursor:pointer;" id="inviteClearPwdWrap">
                 <input type="checkbox" id="inviteClearPassword"> {{ _('guest_clear_password') }}
@@ -163,7 +180,7 @@
         </div>
 
         <div class="form-group">
-            <label class="form-label">{{ _('invite_note_label') }}</label>
+            <label class="form-label invite-label">{{ icon('file') }} {{ _('invite_note_label') }}</label>
             <input class="form-input" type="text" id="inviteNote" placeholder="{{ _('invite_note_placeholder') }}">
         </div>
 
@@ -225,6 +242,10 @@
     function copyInviteUrl(token) {
         copyToClipboard(inviteUrl(token));
         showToast(_('copied'), 'success');
+    }
+
+    function openInviteUrl(token) {
+        window.open(inviteUrl(token), '_blank', 'noopener');
     }
 
     const PROTO_ICONS = {

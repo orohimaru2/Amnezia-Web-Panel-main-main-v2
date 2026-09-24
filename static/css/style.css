@@ -2506,6 +2506,122 @@ body,
     background: var(--accent-gradient);
 }
 
+.invite-admin-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: var(--space-sm);
+    margin-bottom: var(--space-sm);
+}
+
+.invite-admin-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.invite-admin-title .invite-server-ico {
+    background: var(--accent-gradient);
+    color: #fff;
+    border-color: transparent;
+}
+
+.invite-admin-name {
+    font-weight: 700;
+    font-size: 1.05rem;
+}
+
+.invite-admin-note {
+    margin-top: 2px;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 16rem;
+}
+
+.invite-admin-card .invite-stat {
+    background: var(--bg-primary);
+    padding: 8px 10px;
+}
+
+.invite-admin-card .invite-stat-value {
+    font-size: 0.95rem;
+}
+
+.invite-admin-actions {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.invite-admin-actions .btn-primary {
+    flex: 1;
+    min-width: 7rem;
+}
+
+.invite-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.invite-server-search.server-directory-search,
+.invite-public-search.server-directory-search {
+    width: 100%;
+    margin: var(--space-sm) 0;
+}
+
+.invite-status-banner {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin: 0 0 var(--space-md);
+    padding: 12px 14px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    line-height: 1.4;
+}
+
+.invite-status-banner.is-warn {
+    border-color: rgba(245, 158, 11, 0.35);
+    background: rgba(245, 158, 11, 0.08);
+}
+
+.invite-status-banner.is-danger {
+    justify-content: center;
+    align-items: center;
+    color: #ef4444;
+    border-color: rgba(239, 68, 68, 0.35);
+    background: rgba(239, 68, 68, 0.08);
+}
+
+.invite-status-note {
+    display: flex;
+    justify-content: center;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 0.88rem;
+    margin: 0 0 var(--space-md);
+    line-height: 1.4;
+}
+
+.invite-configs-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: var(--space-lg) 0 var(--space-sm);
+    font-weight: 700;
+}
+
+.invite-configs-head .ui-icon {
+    color: var(--accent-light);
+}
+
 .invite-chip-row {
     display: flex;
     flex-wrap: wrap;
