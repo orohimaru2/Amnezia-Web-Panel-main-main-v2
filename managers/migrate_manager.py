@@ -420,6 +420,27 @@ def import_migrate_zip(
                 continue
             item = dict(inv)
             item['server_id'] = target_server_id
+            remapped = []
+            seen = set()
+            for opt in item.get('server_options') or []:
+                if not isinstance(opt, dict):
+                    continue
+                cloned = dict(opt)
+                if cloned.get('kind') != 'xui':
+                    cloned['server_id'] = target_server_id
+                key = (
+                    cloned.get('kind'),
+                    cloned.get('server_id'),
+                    cloned.get('protocol'),
+                    cloned.get('xui_panel_id'),
+                    cloned.get('xui_inbound_id'),
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
+                remapped.append(cloned)
+            if remapped:
+                item['server_options'] = remapped
             if not item.get('id'):
                 item['id'] = str(uuid.uuid4())
             data.setdefault('invite_links', []).append(item)

@@ -6,6 +6,7 @@
 {% block content %}
 <div class="share-page">
     <header class="share-hero">
+        <div class="invite-hero-mark">{{ icon('link') }}</div>
         <h1 class="share-title">{{ invite.name }}</h1>
         <p class="share-user">{{ _('invite_public_subtitle') }}</p>
         {% if not need_password %}
@@ -26,17 +27,23 @@
         </form>
     </div>
     {% else %}
-    <div style="display:grid; grid-template-columns:1fr 1fr; gap:var(--space-sm); margin-bottom:var(--space-md);">
-        <div style="background:var(--bg-card); border-radius:var(--radius-md); padding:var(--space-md); text-align:center;">
-            <div style="font-size:0.72rem; color:var(--text-muted); text-transform:uppercase;">{{ _('invite_uses') }}</div>
-            <div id="usesValue" style="font-weight:700; font-size:1.15rem; margin-top:4px;">
-                {% if invite.unlimited %}∞{% else %}{{ invite.remaining }}{% endif %}
+    <div class="invite-stat-row">
+        <div class="invite-stat">
+            <div class="invite-stat-ico">{{ icon('key') }}</div>
+            <div>
+                <div class="invite-stat-label">{{ _('invite_uses') }}</div>
+                <div id="usesValue" class="invite-stat-value">
+                    {% if invite.unlimited %}∞{% else %}{{ invite.remaining }}{% endif %}
+                </div>
             </div>
         </div>
-        <div style="background:var(--bg-card); border-radius:var(--radius-md); padding:var(--space-md); text-align:center;">
-            <div style="font-size:0.72rem; color:var(--text-muted); text-transform:uppercase;">{{ _('invite_duration_short') }}</div>
-            <div style="font-weight:700; font-size:1.15rem; margin-top:4px;">
-                {% if invite.duration_days %}{{ invite.duration_days }} {{ _('days_short') }}{% else %}∞{% endif %}
+        <div class="invite-stat">
+            <div class="invite-stat-ico">{{ icon('sparkles') }}</div>
+            <div>
+                <div class="invite-stat-label">{{ _('invite_duration_short') }}</div>
+                <div class="invite-stat-value">
+                    {% if invite.duration_days %}{{ invite.duration_days }} {{ _('days_short') }}{% else %}∞{% endif %}
+                </div>
             </div>
         </div>
     </div>
@@ -50,16 +57,16 @@
     </p>
 
     <div id="createBlock" {% if not invite.available %}style="display:none;"{% endif %}>
-        <div id="serverPickWrap" class="form-group" style="margin-bottom:var(--space-md); {% if not invite.allow_server_choice or not invite.servers %}display:none;{% endif %}">
-            <label class="form-label">{{ _('choose_server') }}</label>
-            <select class="form-select" id="inviteServerPick">
-                {% for s in invite.servers or [] %}
-                <option value="{{ s.id }}" {% if s.id == invite.server_id %}selected{% endif %}>{{ s.name }}{% if s.host %} ({{ s.host }}){% endif %}</option>
-                {% endfor %}
-            </select>
+        <div id="serverPickWrap" class="invite-pick {% if not invite.servers %}hidden{% endif %}">
+            <div class="invite-pick-head">
+                <div class="invite-pick-title">{{ icon('server') }} <span id="serverPickLabel">{% if (invite.servers or [])|length > 1 %}{{ _('choose_server') }}{% else %}{{ _('server_label') }}{% endif %}</span></div>
+            </div>
+            <div id="inviteServerCards" class="invite-pick-grid"></div>
+            <p id="serverPickHint" class="invite-pick-hint {% if (invite.servers or [])|length < 2 %}hidden{% endif %}">{{ _('invite_pick_hint') }}</p>
         </div>
-        <button class="btn btn-primary share-btn-lg" style="width:100%;" onclick="createInviteConfig()" id="createBtn">
-            <span id="createBtnText">{{ _('guest_get_config') }}</span>
+        <p id="noServersMsg" class="invite-pick-hint {% if invite.servers or not invite.available %}hidden{% endif %}">{{ _('invite_no_servers_public') }}</p>
+        <button class="btn btn-primary share-btn-lg" style="width:100%; {% if not invite.servers %}display:none;{% endif %}" onclick="createInviteConfig()" id="createBtn">
+            <span id="createBtnText">{{ icon('zap') }} {{ _('guest_get_config') }}</span>
             <div class="spinner hidden" id="createSpinner" style="width:14px;height:14px;"></div>
         </button>
     </div>
@@ -104,8 +111,16 @@
 
 <script>
     const TOKEN = "{{ token }}";
+    const INITIAL_SERVERS = {{ (invite.servers or []) | tojson }};
+    let inviteServers = INITIAL_SERVERS;
+    let selectedOptionId = inviteServers.length ? inviteServers[0].id : null;
     let currentConfig = '';
     let currentVpnLink = '';
+    const PROTO_ICONS = {
+        awg: 'shield', awg2: 'shield', awg3: 'shield', awg_legacy: 'shield', wireguard: 'shield',
+        xray: 'zap', telemt: 'plane', hysteria: 'zap', naiveproxy: 'globe', mieru: 'radio',
+        aivpn: 'sparkles', xui: 'layers',
+    };
 
     function escAttr(s) {
         return String(s || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
@@ -224,22 +239,55 @@
                 if (disabledMsg) disabledMsg.style.display = '';
             }
         }
-        const wrap = document.getElementById('serverPickWrap');
-        const sel = document.getElementById('inviteServerPick');
-        if (wrap && sel && invite.allow_server_choice && (invite.servers || []).length) {
-            const prev = sel.value;
-            sel.innerHTML = '';
-            (invite.servers || []).forEach(s => {
-                const opt = document.createElement('option');
-                opt.value = String(s.id);
-                opt.textContent = s.host ? `${s.name} (${s.host})` : s.name;
-                if (String(s.id) === String(prev) || String(s.id) === String(invite.server_id)) opt.selected = true;
-                sel.appendChild(opt);
-            });
-            wrap.style.display = '';
-        } else if (wrap) {
-            wrap.style.display = 'none';
+        if (Array.isArray(invite.servers)) {
+            inviteServers = invite.servers;
+            renderServerCards();
         }
+        const createBtn = document.getElementById('createBtn');
+        const noServers = document.getElementById('noServersMsg');
+        const hasServers = inviteServers.length > 0;
+        if (createBtn) createBtn.style.display = (invite.available && hasServers) ? '' : 'none';
+        if (noServers) noServers.classList.toggle('hidden', !invite.available || hasServers);
+    }
+
+    function selectInviteServer(id) {
+        if (inviteServers.length < 2) return;
+        selectedOptionId = id;
+        renderServerCards();
+    }
+
+    function renderServerCards() {
+        const wrap = document.getElementById('serverPickWrap');
+        const grid = document.getElementById('inviteServerCards');
+        const label = document.getElementById('serverPickLabel');
+        const hint = document.getElementById('serverPickHint');
+        if (!wrap || !grid) return;
+        if (!inviteServers.length) {
+            wrap.classList.add('hidden');
+            grid.innerHTML = '';
+            return;
+        }
+        wrap.classList.remove('hidden');
+        const multi = inviteServers.length > 1;
+        if (label) label.textContent = multi ? _('choose_server') : _('server_label');
+        if (hint) hint.classList.toggle('hidden', !multi);
+        if (selectedOptionId == null || !inviteServers.some(s => String(s.id) === String(selectedOptionId))) {
+            selectedOptionId = inviteServers[0].id;
+        }
+        grid.innerHTML = inviteServers.map(s => {
+            const on = String(s.id) === String(selectedOptionId);
+            const base = String(s.protocol || '').split('__')[0];
+            const icon = s.kind === 'xui' ? 'layers' : (PROTO_ICONS[base] || 'server');
+            const meta = [s.protocol_label || protoLabel(s.protocol), s.host].filter(Boolean).join(' · ');
+            return `<button type="button" class="invite-choice${on ? ' is-on' : ''}${multi ? '' : ' is-single'}" onclick="selectInviteServer(${Number(s.id)})">
+                <span class="invite-choice-ico">${typeof uiIcon === 'function' ? uiIcon(icon) : ''}</span>
+                <span class="invite-choice-copy">
+                    <span class="invite-choice-name">${escHtml(s.name)}</span>
+                    <span class="invite-choice-meta">${escHtml(meta)}</span>
+                </span>
+                <span class="invite-choice-check">${typeof uiIcon === 'function' ? uiIcon('check') : ''}</span>
+            </button>`;
+        }).join('');
     }
 
     async function fetchInviteConfig(connId) {
@@ -330,11 +378,9 @@
         spinner.classList.remove('hidden');
         try {
             const body = { name: 'Invite VPN' };
-            const wrap = document.getElementById('serverPickWrap');
-            const sel = document.getElementById('inviteServerPick');
-            if (wrap && wrap.style.display !== 'none' && sel && sel.value !== '') {
-                body.server_id = parseInt(sel.value, 10);
-            }
+            if (!inviteServers.length) throw new Error(_('invite_no_servers_public'));
+            if (selectedOptionId == null) throw new Error(_('choose_server'));
+            body.option_id = Number(selectedOptionId);
             const res = await fetch(`/api/invite/${TOKEN}/create`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -359,7 +405,10 @@
         }
     }
 
-    document.addEventListener('DOMContentLoaded', loadConnections);
+    document.addEventListener('DOMContentLoaded', () => {
+        renderServerCards();
+        loadConnections();
+    });
 </script>
 
 <style>

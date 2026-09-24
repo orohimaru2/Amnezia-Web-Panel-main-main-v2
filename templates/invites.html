@@ -38,18 +38,10 @@
 
     <div id="invitesGrid" style="display:{% if invites %}grid{% else %}none{% endif %}; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: var(--space-md);">
         {% for inv in invites %}
-        <div class="card invite-card" id="invite-{{ inv.id }}" style="padding:var(--space-md); {% if not inv.enabled %}opacity:0.55;{% endif %}">
+        <div class="card invite-card invite-admin-card" id="invite-{{ inv.id }}" style="padding:var(--space-md); {% if not inv.enabled %}opacity:0.55;{% endif %}">
             <div style="display:flex; justify-content:space-between; gap:var(--space-sm); align-items:flex-start; margin-bottom:var(--space-sm);">
                 <div>
                     <div style="font-weight:700; font-size:1.05rem;">{{ inv.name }}</div>
-                    <div style="font-size:0.8rem; color:var(--text-muted); margin-top:2px;">
-                        {% if inv.protocol == 'xui' %}
-                            3x-ui · {% for s in xui_servers if s.id == inv.xui_panel_id %}{{ s.name }}{% else %}{{ _('xui_server_select_label') }}{% endfor %}
-                            · inbound #{{ inv.xui_inbound_id or '—' }}
-                        {% else %}
-                            {{ inv.protocol }}
-                        {% endif %}
-                    </div>
                 </div>
                 {% if inv.available %}
                 <span class="badge badge-success">{{ _('invite_active') }}</span>
@@ -59,6 +51,21 @@
                 <span class="badge badge-secondary">{{ _('disabled') }}</span>
                 {% endif %}
             </div>
+
+            {% if inv.servers %}
+            <div class="invite-chip-row">
+                {% for s in inv.servers[:4] %}
+                <span class="invite-chip" title="{{ s.protocol_label or s.protocol }}">
+                    {{ icon('layers') if s.kind == 'xui' else icon('server') }}
+                    <span>{{ s.name }}</span>
+                    {% if s.protocol_label %}<span class="invite-chip-meta">{{ s.protocol_label }}</span>{% endif %}
+                </span>
+                {% endfor %}
+                {% if inv.servers|length > 4 %}
+                <span class="invite-chip">+{{ inv.servers|length - 4 }}</span>
+                {% endif %}
+            </div>
+            {% endif %}
 
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:var(--space-sm); margin-bottom:var(--space-md);">
                 <div style="background:var(--bg-primary); border-radius:var(--radius-md); padding:var(--space-sm);">
@@ -89,7 +96,7 @@
 </section>
 
 <div class="modal-backdrop" id="inviteModal">
-    <div class="modal" style="max-width: 560px;">
+    <div class="modal" style="max-width: 640px;">
         <div class="modal-header">
             <h2 class="modal-title" id="inviteModalTitle">{{ _('invite_create') }}</h2>
             <button class="modal-close" onclick="closeModal('inviteModal')">×</button>
@@ -127,38 +134,17 @@
         </div>
 
         <div class="form-group">
-            <label class="form-label">{{ _('server_label') }}</label>
-            <select class="form-select" id="inviteServer" onchange="onInviteServerChange()">
-                {% if xui_configured %}
-                <option value="xui">3x-ui</option>
-                {% endif %}
-                {% for s in servers %}
-                <option value="{{ loop.index0 }}">{{ s.name or s.host }} ({{ s.host }})</option>
-                {% endfor %}
-            </select>
-            <div class="form-hint">{{ _('server_then_protocol_hint') }}</div>
-        </div>
-
-        <div class="form-group" id="inviteProtoGroup">
-            <label class="form-label">{{ _('protocol_label') }}</label>
-            <select class="form-select" id="inviteProtocol" onchange="updateInviteProtoFields()">
-                <!-- filled by JS from selected server -->
-            </select>
-        </div>
-
-        <div class="form-group" id="inviteInboundGroup">
-            <label class="form-label">{{ _('xui_server_select_label') }}</label>
-            <select class="form-select" id="inviteXuiPanel" onchange="loadInviteInbounds()">
-                {% for s in xui_servers %}
-                <option value="{{ s.id }}">{{ s.name }}</option>
-                {% endfor %}
-            </select>
-            <div class="form-hint">{{ _('xui_server_select_hint') }}</div>
-            <label class="form-label" style="margin-top:var(--space-sm);">{{ _('xui_inbound_label') }}</label>
-            <select class="form-select" id="inviteInboundId">
-                <option value="">{{ _('invite_inbound_loading') }}</option>
-            </select>
-            <div class="form-hint">{{ _('xui_inbound_hint') }}</div>
+            <div class="invite-servers-head">
+                <label class="form-label">{{ icon('server') }} {{ _('invite_servers_label') }}</label>
+                <div class="invite-servers-actions">
+                    <span class="invite-count-pill is-empty" id="inviteServersCount">{{ _('invite_servers_none') }}</span>
+                    <button type="button" class="btn btn-secondary btn-sm" onclick="selectAllInviteServers()">{{ icon('check') }} {{ _('invite_servers_select_all') }}</button>
+                    <button type="button" class="btn btn-secondary btn-sm" onclick="clearInviteServers()">{{ icon('x') }} {{ _('invite_servers_clear') }}</button>
+                </div>
+            </div>
+            <div class="form-hint">{{ _('invite_servers_hint') }}</div>
+            <input class="form-input invite-server-search" type="search" id="inviteServerSearch" placeholder="{{ _('invite_servers_search') }}" oninput="filterInviteServers()">
+            <div id="inviteServerGrid" class="invite-server-grid"></div>
         </div>
 
         <div class="form-group">
@@ -172,14 +158,6 @@
         <div class="form-group">
             <label class="form-label">{{ _('invite_note_label') }}</label>
             <input class="form-input" type="text" id="inviteNote" placeholder="{{ _('invite_note_placeholder') }}">
-        </div>
-
-        <div class="form-group">
-            <label style="display:flex; align-items:center; gap:var(--space-sm); cursor:pointer;">
-                <input type="checkbox" id="inviteAllowServerChoice" checked>
-                {{ _('allow_server_choice') }}
-            </label>
-            <div class="form-hint">{{ _('allow_server_choice_hint') }}</div>
         </div>
 
         <div class="form-group" id="inviteResetUsedWrap" style="display:none;">
@@ -201,9 +179,11 @@
 <script>
     const invitesData = {{ invites | tojson }};
     const serversData = {{ servers | tojson }};
+    const xuiPanels = {{ xui_panels | tojson }};
     const xuiConfigured = {{ 'true' if xui_configured else 'false' }};
     const xuiDefaultInbound = {{ xui_default_inbound | int }};
     const xuiDefaultPanelId = {{ (xui_default_panel_id or '') | tojson }};
+    let inviteSelection = {};
     const VPN_PROTO_ORDER = ['awg3', 'awg2', 'awg', 'awg_legacy', 'wireguard', 'xray', 'telemt', 'hysteria', 'naiveproxy', 'mieru'];
         const PROTO_TITLES = {
         awg3: 'AmneziaWG 3.1',
@@ -237,120 +217,324 @@
         showToast(_('copied'), 'success');
     }
 
-    function fillInviteProtocols(preferProtocol) {
-        const serverVal = document.getElementById('inviteServer').value;
-        const sel = document.getElementById('inviteProtocol');
-        sel.innerHTML = '';
+    const PROTO_ICONS = {
+        awg: 'shield', awg2: 'shield', awg3: 'shield', awg_legacy: 'shield', wireguard: 'shield',
+        xray: 'zap', telemt: 'plane', hysteria: 'zap', naiveproxy: 'globe', mieru: 'radio',
+        aivpn: 'sparkles', xui: 'layers',
+    };
 
-        if (serverVal === 'xui') {
-            const opt = document.createElement('option');
-            opt.value = 'xui';
-            opt.textContent = PROTO_TITLES.xui;
-            sel.appendChild(opt);
-            updateInviteProtoFields();
-            return;
-        }
+    function escHtml(s) {
+        return String(s || '')
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
 
-        const server = serversData[parseInt(serverVal, 10)];
+    function installedProtocols(server) {
         const protocols = (server && server.protocols) || {};
         const installed = Object.keys(protocols).filter(k => {
             const info = protocols[k] || {};
             if (!info.installed) return false;
-            return VPN_PROTO_ORDER.includes(k.split('__')[0]);
+            return VPN_PROTO_ORDER.includes(String(k).split('__')[0]);
         });
         installed.sort((a, b) => {
-            const ia = VPN_PROTO_ORDER.indexOf(a.split('__')[0]);
-            const ib = VPN_PROTO_ORDER.indexOf(b.split('__')[0]);
-            return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b);
+            const ia = VPN_PROTO_ORDER.indexOf(String(a).split('__')[0]);
+            const ib = VPN_PROTO_ORDER.indexOf(String(b).split('__')[0]);
+            return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || String(a).localeCompare(String(b));
         });
+        return installed;
+    }
 
-        if (!installed.length) {
-            const opt = document.createElement('option');
-            opt.value = '';
-            opt.textContent = _('no_protocols');
-            opt.disabled = true;
-            sel.appendChild(opt);
-            updateInviteProtoFields();
-            return;
-        }
+    function resolveProtocol(server, wanted) {
+        const installed = installedProtocols(server);
+        if (!installed.length) return wanted || '';
+        if (!wanted) return installed[0];
+        if (installed.includes(wanted)) return wanted;
+        const base = String(wanted).split('__')[0];
+        if (base === 'aivpn') return 'aivpn';
+        return installed.find(k => String(k).split('__')[0] === base) || installed[0];
+    }
 
-        const aivpnOpt = document.createElement('option');
-        aivpnOpt.value = 'aivpn';
-        aivpnOpt.textContent = _('aivpn_protocol_option') || 'AIVPN (auto)';
-        if (preferProtocol === 'aivpn') aivpnOpt.selected = true;
-        sel.appendChild(aivpnOpt);
+    function protoIcon(key) {
+        const base = String(key || '').split('__')[0];
+        return PROTO_ICONS[base] || 'shield';
+    }
 
-        installed.forEach(key => {
-            const opt = document.createElement('option');
-            opt.value = key;
-            opt.textContent = protoTitle(key);
-            if (preferProtocol && preferProtocol === key) opt.selected = true;
-            sel.appendChild(opt);
+    function snapshotInbounds() {
+        document.querySelectorAll('.invite-inbound-select').forEach(sel => {
+            const panelId = sel.getAttribute('data-inbound-for');
+            const key = `xui:${panelId}`;
+            if (!inviteSelection[key]) return;
+            const n = parseInt(sel.value || '0', 10);
+            if (n) inviteSelection[key].xui_inbound_id = n;
         });
-        updateInviteProtoFields();
     }
 
-    function onInviteServerChange() {
-        fillInviteProtocols();
+    function updateInviteServerCount() {
+        const el = document.getElementById('inviteServersCount');
+        if (!el) return;
+        const n = Object.keys(inviteSelection).length;
+        el.textContent = n ? _('invite_servers_selected').replace('{}', String(n)) : _('invite_servers_none');
+        el.classList.toggle('is-empty', !n);
     }
 
-    function updateInviteProtoFields() {
-        const v = document.getElementById('inviteProtocol').value;
-        document.getElementById('inviteInboundGroup').style.display = (v === 'xui') ? '' : 'none';
-        if (v === 'xui') loadInviteInbounds(document.getElementById('inviteInboundId').value || xuiDefaultInbound);
+    function sshOption(idx, protocol) {
+        return {
+            kind: 'ssh',
+            server_id: idx,
+            protocol: protocol,
+            xui_panel_id: '',
+            xui_inbound_id: 0,
+        };
     }
 
-    async function loadInviteInbounds(selected) {
-        const select = document.getElementById('inviteInboundId');
-        select.innerHTML = `<option value="">${_('invite_inbound_loading')}</option>`;
-        if (!xuiConfigured) {
-            select.innerHTML = `<option value="">${_('invite_inbound_need_xui')}</option>`;
-            return;
-        }
-        try {
-            const panelId = document.getElementById('inviteXuiPanel')?.value || xuiDefaultPanelId || '';
-            const q = panelId ? `?panel_id=${encodeURIComponent(panelId)}` : '';
-            const data = await apiCall('/api/settings/xui/inbounds' + q);
-            const list = data.inbounds || [];
-            if (!list.length) {
-                select.innerHTML = `<option value="">${_('invite_inbound_empty')}</option>`;
+    function xuiOption(panel, inboundId) {
+        return {
+            kind: 'xui',
+            server_id: 0,
+            protocol: 'xui',
+            xui_panel_id: panel.id,
+            xui_inbound_id: inboundId || panel.default_inbound_id || xuiDefaultInbound || 0,
+        };
+    }
+
+    function renderInviteServerGrid() {
+        const grid = document.getElementById('inviteServerGrid');
+        if (!grid) return;
+        snapshotInbounds();
+        const cards = [];
+        serversData.forEach((server, idx) => {
+            const protos = installedProtocols(server);
+            const key = `ssh:${idx}`;
+            const name = server.name || server.host || `Server ${idx + 1}`;
+            const host = server.host || '';
+            const selected = inviteSelection[key];
+            if (!protos.length) {
+                cards.push(`
+                    <div class="invite-server-card is-disabled" data-search="${escHtml(`${name} ${host}`)}">
+                        <div class="invite-server-top">
+                            <div class="invite-server-ico">${uiIcon('server')}</div>
+                            <div class="invite-server-copy">
+                                <div class="invite-server-name">${escHtml(name)}</div>
+                                <div class="invite-server-host">${escHtml(host || _('invite_no_protocol_short'))}</div>
+                            </div>
+                        </div>
+                    </div>`);
                 return;
             }
-            select.innerHTML = '';
-            list.forEach((ib, idx) => {
-                const opt = document.createElement('option');
-                opt.value = ib.id;
-                opt.textContent = `${ib.remark || 'VLESS'} (:${ib.port})`;
-                const prefer = selected || xuiDefaultInbound;
-                if (prefer && String(ib.id) === String(prefer)) opt.selected = true;
-                else if (!prefer && idx === 0) opt.selected = true;
-                select.appendChild(opt);
-            });
-        } catch (e) {
-            select.innerHTML = `<option value="">${_('error')}: ${e.message}</option>`;
+            const protocol = selected ? resolveProtocol(server, selected.protocol) : protos[0];
+            if (selected) selected.protocol = protocol;
+            const chips = [`<button type="button" class="invite-proto-chip${protocol === 'aivpn' ? ' is-on' : ''}" data-proto="aivpn" onclick="setInviteProto('${key}', 'aivpn', event)">${uiIcon('sparkles')} ${escHtml(_('aivpn_protocol_option') || 'AIVPN')}</button>`]
+                .concat(protos.map(p => `<button type="button" class="invite-proto-chip${p === protocol ? ' is-on' : ''}" data-proto="${escHtml(p)}" onclick="setInviteProto('${key}', '${escHtml(p)}', event)">${uiIcon(protoIcon(p))} ${escHtml(protoTitle(p))}</button>`));
+            cards.push(`
+                <div class="invite-server-card${selected ? ' is-on' : ''}" role="button" tabindex="0" data-server-key="${key}" data-search="${escHtml(`${name} ${host}`)}" onclick="toggleInviteServer('${key}')" onkeydown="if((event.key==='Enter'||event.key===' ')&&event.target===this){event.preventDefault();toggleInviteServer('${key}')}">
+                    <div class="invite-server-top">
+                        <div class="invite-server-ico">${uiIcon('server')}</div>
+                        <div class="invite-server-copy">
+                            <div class="invite-server-name">${escHtml(name)}</div>
+                            <div class="invite-server-host">${escHtml(host)}</div>
+                        </div>
+                        <div class="invite-server-check">${uiIcon('check')}</div>
+                    </div>
+                    ${selected ? `<div onclick="event.stopPropagation()"><div class="invite-proto-label">${escHtml(_('invite_server_protocol'))}</div><div class="invite-proto-row">${chips.join('')}</div></div>` : ''}
+                </div>`);
+        });
+        xuiPanels.forEach(panel => {
+            const key = `xui:${panel.id}`;
+            const selected = inviteSelection[key];
+            const name = panel.name || '3x-ui';
+            cards.push(`
+                <div class="invite-server-card${selected ? ' is-on' : ''}" role="button" tabindex="0" data-server-key="${escHtml(key)}" data-search="${escHtml(name)}" onclick="toggleInviteServer('${escHtml(key)}')" onkeydown="if((event.key==='Enter'||event.key===' ')&&event.target===this){event.preventDefault();toggleInviteServer('${escHtml(key)}')}">
+                    <div class="invite-server-top">
+                        <div class="invite-server-ico">${uiIcon('layers')}</div>
+                        <div class="invite-server-copy">
+                            <div class="invite-server-name">${escHtml(name)}</div>
+                            <div class="invite-server-host">3x-ui VLESS</div>
+                        </div>
+                        <div class="invite-server-check">${uiIcon('check')}</div>
+                    </div>
+                    ${selected ? `<div class="invite-inbound-wrap" onclick="event.stopPropagation()">
+                        <label class="form-label">${escHtml(_('xui_inbound_label'))}</label>
+                        <select class="form-select invite-inbound-select" data-inbound-for="${escHtml(panel.id)}"></select>
+                    </div>` : ''}
+                </div>`);
+        });
+        if (!cards.length) {
+            grid.innerHTML = `<div class="form-hint" style="margin:0;">${escHtml(_('invite_servers_empty'))}</div>`;
+        } else {
+            grid.innerHTML = cards.join('');
         }
+        updateInviteServerCount();
+        filterInviteServers();
+        hydrateXuiInbounds();
     }
 
-    function parseInviteSelection() {
-        const serverVal = document.getElementById('inviteServer').value;
-        const protocol = document.getElementById('inviteProtocol').value;
-        if (serverVal === 'xui' || protocol === 'xui') {
-            return { protocol: 'xui', server_id: 0 };
-        }
-        return { protocol, server_id: parseInt(serverVal || '0', 10) || 0 };
+    function filterInviteServers() {
+        const q = (document.getElementById('inviteServerSearch')?.value || '').trim().toLowerCase();
+        document.querySelectorAll('#inviteServerGrid .invite-server-card').forEach(card => {
+            const hay = (card.getAttribute('data-search') || '').toLowerCase();
+            card.style.display = !q || hay.includes(q) ? '' : 'none';
+        });
     }
 
-    function setInviteSelection(protocol, serverId) {
-        const serverSel = document.getElementById('inviteServer');
-        if (protocol === 'xui') {
-            if ([...serverSel.options].some(o => o.value === 'xui')) serverSel.value = 'xui';
-            fillInviteProtocols('xui');
+    function toggleInviteServer(key) {
+        snapshotInbounds();
+        if (inviteSelection[key]) {
+            delete inviteSelection[key];
+            renderInviteServerGrid();
             return;
         }
-        const sid = String(serverId || 0);
-        if ([...serverSel.options].some(o => o.value === sid)) serverSel.value = sid;
-        else if (serverSel.options.length) serverSel.selectedIndex = xuiConfigured ? 1 : 0;
-        fillInviteProtocols(protocol);
+        if (key.startsWith('ssh:')) {
+            const idx = parseInt(key.slice(4), 10);
+            const server = serversData[idx];
+            const protos = installedProtocols(server);
+            if (!protos.length) return;
+            inviteSelection[key] = sshOption(idx, protos[0]);
+        } else if (key.startsWith('xui:')) {
+            const panelId = key.slice(4);
+            const panel = xuiPanels.find(p => String(p.id) === panelId);
+            if (!panel) return;
+            inviteSelection[key] = xuiOption(panel, panel.default_inbound_id || xuiDefaultInbound);
+        }
+        renderInviteServerGrid();
+    }
+
+    function setInviteProto(key, protocol, ev) {
+        if (ev) {
+            ev.stopPropagation();
+            ev.preventDefault();
+        }
+        if (!inviteSelection[key]) return;
+        inviteSelection[key].protocol = protocol;
+        const card = document.querySelector(`[data-server-key="${key}"]`);
+        if (!card) return;
+        card.querySelectorAll('.invite-proto-chip').forEach(chip => {
+            chip.classList.toggle('is-on', chip.getAttribute('data-proto') === protocol);
+        });
+    }
+
+    async function hydrateXuiInbounds() {
+        const selects = [...document.querySelectorAll('.invite-inbound-select')];
+        await Promise.all(selects.map(async (select) => {
+            const panelId = select.getAttribute('data-inbound-for') || '';
+            const selected = inviteSelection[`xui:${panelId}`];
+            const prefer = (selected && selected.xui_inbound_id) || xuiDefaultInbound;
+            select.innerHTML = `<option value="">${escHtml(_('invite_inbound_loading'))}</option>`;
+            try {
+                const q = panelId ? `?panel_id=${encodeURIComponent(panelId)}` : '';
+                const data = await apiCall('/api/settings/xui/inbounds' + q);
+                const list = data.inbounds || [];
+                if (!list.length) {
+                    select.innerHTML = `<option value="">${escHtml(_('invite_inbound_empty'))}</option>`;
+                    return;
+                }
+                select.innerHTML = '';
+                list.forEach((ib, idx) => {
+                    const opt = document.createElement('option');
+                    opt.value = ib.id;
+                    opt.textContent = `${ib.remark || 'VLESS'} (:${ib.port})`;
+                    if (prefer && String(ib.id) === String(prefer)) opt.selected = true;
+                    else if (!prefer && idx === 0) opt.selected = true;
+                    select.appendChild(opt);
+                });
+                if (selected) {
+                    const n = parseInt(select.value || '0', 10);
+                    if (n) selected.xui_inbound_id = n;
+                }
+            } catch (e) {
+                select.innerHTML = `<option value="">${escHtml(_('error'))}</option>`;
+            }
+        }));
+    }
+
+    function selectAllInviteServers() {
+        snapshotInbounds();
+        serversData.forEach((server, idx) => {
+            const protos = installedProtocols(server);
+            if (!protos.length) return;
+            const key = `ssh:${idx}`;
+            if (!inviteSelection[key]) inviteSelection[key] = sshOption(idx, protos[0]);
+        });
+        xuiPanels.forEach(panel => {
+            const key = `xui:${panel.id}`;
+            if (!inviteSelection[key]) inviteSelection[key] = xuiOption(panel, panel.default_inbound_id || xuiDefaultInbound);
+        });
+        renderInviteServerGrid();
+    }
+
+    function clearInviteServers() {
+        inviteSelection = {};
+        renderInviteServerGrid();
+    }
+
+    function preselectIfSingle() {
+        const ssh = [];
+        serversData.forEach((server, idx) => {
+            if (installedProtocols(server).length) ssh.push(idx);
+        });
+        const total = ssh.length + xuiPanels.length;
+        if (total !== 1) return;
+        if (ssh.length === 1) {
+            const idx = ssh[0];
+            inviteSelection[`ssh:${idx}`] = sshOption(idx, installedProtocols(serversData[idx])[0]);
+        } else if (xuiPanels.length === 1) {
+            inviteSelection[`xui:${xuiPanels[0].id}`] = xuiOption(xuiPanels[0], xuiPanels[0].default_inbound_id || xuiDefaultInbound);
+        }
+    }
+
+    function selectionFromInvite(inv) {
+        inviteSelection = {};
+        const raw = (inv.server_options && inv.server_options.length) ? inv.server_options : (inv.servers || []);
+        if (!raw.length && inv.protocol) {
+            if (inv.protocol === 'xui') {
+                const panelId = inv.xui_panel_id || xuiDefaultPanelId || (xuiPanels[0] && xuiPanels[0].id) || '';
+                const panel = xuiPanels.find(p => String(p.id) === String(panelId)) || xuiPanels[0];
+                if (panel) inviteSelection[`xui:${panel.id}`] = xuiOption(panel, inv.xui_inbound_id || panel.default_inbound_id);
+            } else if (serversData[inv.server_id || 0]) {
+                const sid = inv.server_id || 0;
+                inviteSelection[`ssh:${sid}`] = sshOption(sid, resolveProtocol(serversData[sid], inv.protocol));
+            }
+            return;
+        }
+        raw.forEach(o => {
+            const kind = o.kind || (o.protocol === 'xui' ? 'xui' : 'ssh');
+            if (kind === 'xui') {
+                const panelId = o.xui_panel_id || xuiDefaultPanelId || (xuiPanels[0] && xuiPanels[0].id) || '';
+                const panel = xuiPanels.find(p => String(p.id) === String(panelId));
+                if (!panel) return;
+                inviteSelection[`xui:${panel.id}`] = xuiOption(panel, o.xui_inbound_id || panel.default_inbound_id);
+            } else {
+                const sid = Number(o.server_id || 0);
+                if (!serversData[sid]) return;
+                inviteSelection[`ssh:${sid}`] = sshOption(sid, resolveProtocol(serversData[sid], o.protocol));
+            }
+        });
+    }
+
+    function collectInviteOptions() {
+        snapshotInbounds();
+        const options = [];
+        serversData.forEach((server, idx) => {
+            const sel = inviteSelection[`ssh:${idx}`];
+            if (!sel) return;
+            options.push({
+                kind: 'ssh',
+                server_id: idx,
+                protocol: sel.protocol,
+                xui_panel_id: '',
+                xui_inbound_id: 0,
+            });
+        });
+        xuiPanels.forEach(panel => {
+            const sel = inviteSelection[`xui:${panel.id}`];
+            if (!sel) return;
+            options.push({
+                kind: 'xui',
+                server_id: 0,
+                protocol: 'xui',
+                xui_panel_id: panel.id,
+                xui_inbound_id: sel.xui_inbound_id || 0,
+            });
+        });
+        return options;
     }
 
     function openCreateInvite() {
@@ -364,18 +548,11 @@
         document.getElementById('inviteNote').value = '';
         document.getElementById('inviteClearPwdWrap').style.display = 'none';
         document.getElementById('inviteResetUsedWrap').style.display = 'none';
-        document.getElementById('inviteAllowServerChoice').checked = true;
-        const serverSel = document.getElementById('inviteServer');
-        if (xuiConfigured && [...serverSel.options].some(o => o.value === 'xui')) serverSel.value = 'xui';
-        else if (serverSel.options.length) serverSel.selectedIndex = 0;
-        fillInviteProtocols();
-        if (xuiDefaultPanelId) {
-            const p = document.getElementById('inviteXuiPanel');
-            if (p && [...p.options].some(o => o.value === xuiDefaultPanelId)) p.value = xuiDefaultPanelId;
-        }
-        if (document.getElementById('inviteProtocol').value === 'xui') {
-            loadInviteInbounds(xuiDefaultInbound);
-        }
+        const search = document.getElementById('inviteServerSearch');
+        if (search) search.value = '';
+        inviteSelection = {};
+        preselectIfSingle();
+        renderInviteServerGrid();
         openModal('inviteModal');
     }
 
@@ -394,15 +571,10 @@
         document.getElementById('inviteClearPassword').checked = false;
         document.getElementById('inviteResetUsedWrap').style.display = 'block';
         document.getElementById('inviteResetUsed').checked = false;
-        document.getElementById('inviteAllowServerChoice').checked = inv.allow_server_choice !== false;
-        setInviteSelection(inv.protocol || 'xui', inv.server_id || 0);
-        const panelSel = document.getElementById('inviteXuiPanel');
-        if (panelSel && inv.xui_panel_id && [...panelSel.options].some(o => o.value === inv.xui_panel_id)) {
-            panelSel.value = inv.xui_panel_id;
-        }
-        if ((inv.protocol || '') === 'xui') {
-            loadInviteInbounds(inv.xui_inbound_id || xuiDefaultInbound);
-        }
+        const search = document.getElementById('inviteServerSearch');
+        if (search) search.value = '';
+        selectionFromInvite(inv);
+        renderInviteServerGrid();
         openModal('inviteModal');
     }
 
@@ -413,22 +585,25 @@
         spinner.classList.remove('hidden');
         try {
             const editId = document.getElementById('inviteEditId').value;
-            const proto = parseInviteSelection();
-            if (!proto.protocol) throw new Error(_('no_protocols'));
-            const inbound = parseInt(document.getElementById('inviteInboundId').value || '0');
-            if (proto.protocol === 'xui' && !inbound) throw new Error(_('invite_inbound_required'));
+            await hydrateXuiInbounds();
+            const options = collectInviteOptions();
+            if (!options.length) throw new Error(_('invite_servers_required'));
+            const xuiMissing = options.find(o => o.kind === 'xui' && !o.xui_inbound_id);
+            if (xuiMissing) throw new Error(_('invite_inbound_required'));
+            const first = options[0];
 
             const body = {
                 name: document.getElementById('inviteName').value || 'Invite',
                 max_uses: parseInt(document.getElementById('inviteMaxUses').value || '1'),
                 duration_days: parseInt(document.getElementById('inviteDurationDays').value || '0'),
                 user_id: document.getElementById('inviteUserId').value || '',
-                protocol: proto.protocol,
-                server_id: proto.server_id,
-                xui_inbound_id: inbound,
-                xui_panel_id: document.getElementById('inviteXuiPanel')?.value || '',
+                protocol: first.protocol,
+                server_id: first.server_id || 0,
+                xui_inbound_id: first.kind === 'xui' ? first.xui_inbound_id : 0,
+                xui_panel_id: first.kind === 'xui' ? first.xui_panel_id : '',
                 note: document.getElementById('inviteNote').value || '',
-                allow_server_choice: document.getElementById('inviteAllowServerChoice').checked,
+                allow_server_choice: options.length > 1,
+                server_options: options,
             };
             const pwd = document.getElementById('invitePassword').value;
             if (pwd) body.password = pwd;

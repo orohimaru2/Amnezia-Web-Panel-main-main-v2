@@ -2527,6 +2527,14 @@ class GuestCreateRequest(BaseModel):
     server_id: Optional[int] = None
 
 
+class InviteServerOption(BaseModel):
+    kind: str = 'ssh'  # ssh | xui
+    server_id: int = 0
+    protocol: str = ''
+    xui_panel_id: str = ''
+    xui_inbound_id: int = 0
+
+
 class InviteCreateRequest(BaseModel):
     name: str = 'Invite'
     max_uses: int = 1  # 0 = unlimited
@@ -2540,6 +2548,7 @@ class InviteCreateRequest(BaseModel):
     note: str = ''
     enabled: bool = True
     allow_server_choice: bool = True
+    server_options: Optional[List[InviteServerOption]] = None
 
 
 class InviteUpdateRequest(BaseModel):
@@ -2557,11 +2566,13 @@ class InviteUpdateRequest(BaseModel):
     enabled: Optional[bool] = None
     reset_used: bool = False
     allow_server_choice: Optional[bool] = None
+    server_options: Optional[List[InviteServerOption]] = None
 
 
 class InviteRedeemRequest(BaseModel):
     name: str = 'Invite VPN'
     server_id: Optional[int] = None
+    option_id: Optional[int] = None
 
 
 class TunnelStartRequest(BaseModel):
@@ -6154,6 +6165,260 @@ def _match_protocol_on_server(server: dict, protocol: str) -> str:
     return candidates[0]
 
 
+_INVITE_PROTO_LABELS = {
+    'awg3': 'AmneziaWG 3.1',
+    'awg2': 'AmneziaWG 2.0',
+    'awg': 'AmneziaWG',
+    'awg_legacy': 'AWG Legacy',
+    'wireguard': 'WireGuard',
+    'xray': 'Xray',
+    'telemt': 'Telemt',
+    'hysteria': 'Hysteria 2',
+    'naiveproxy': 'NaiveProxy',
+    'mieru': 'Mieru',
+    'aivpn': 'AIVPN',
+    'xui': '3x-ui VLESS',
+}
+_INVITE_PROTO_ORDER = ['awg3', 'awg2', 'awg', 'awg_legacy', 'wireguard', 'xray', 'telemt', 'hysteria', 'naiveproxy', 'mieru']
+
+
+def _invite_proto_label(protocol: str) -> str:
+    raw = str(protocol or '')
+    base = protocol_base(raw) if raw else ''
+    title = _INVITE_PROTO_LABELS.get(base, (base or 'VPN').upper())
+    match = re.search(r'__(\d+)$', raw)
+    return f'{title} #{match.group(1)}' if match else title
+
+
+def _installed_vpn_keys(server: dict) -> list:
+    protocols = server.get('protocols') or {}
+    keys = []
+    for key, info in protocols.items():
+        if not isinstance(info, dict) or not info.get('installed'):
+            continue
+        base = protocol_base(key)
+        if base not in CLIENT_VPN_BASES or base == 'xui':
+            continue
+        keys.append(key)
+    keys.sort(key=lambda k: (
+        _INVITE_PROTO_ORDER.index(protocol_base(k)) if protocol_base(k) in _INVITE_PROTO_ORDER else 99,
+        k,
+    ))
+    return keys
+
+
+def _url_host(url: str) -> str:
+    raw = (url or '').strip()
+    if '://' in raw:
+        raw = raw.split('://', 1)[1]
+    raw = raw.split('/', 1)[0]
+    if '@' in raw:
+        raw = raw.split('@', 1)[1]
+    return raw.split(':')[0]
+
+
+def _option_dict(item) -> dict:
+    if hasattr(item, 'model_dump'):
+        return item.model_dump()
+    if isinstance(item, dict):
+        return item
+    return {}
+
+
+def _normalize_server_options(data: dict, raw_options: list) -> list:
+    """Validate admin-selected invite servers. Raises ValueError with a translation key or message."""
+    if not raw_options:
+        raise ValueError('invite_servers_required')
+    from managers.xui_servers import get_xui_server, ensure_xui_servers
+    servers = data.get('servers') or []
+    ensure_xui_servers(data.setdefault('settings', {}))
+    out = []
+    seen = set()
+    for item in raw_options:
+        src = _option_dict(item)
+        kind = (src.get('kind') or 'ssh').strip() or 'ssh'
+        if kind == 'xui' or protocol_base(src.get('protocol') or '') == 'xui':
+            panel = get_xui_server(data.get('settings') or {}, (src.get('xui_panel_id') or '').strip() or None)
+            if not panel:
+                raise ValueError('Add a 3x-ui server in Settings first')
+            panel_id = panel.get('id') or ''
+            inbound = int(src.get('xui_inbound_id') or 0) or int(panel.get('default_inbound_id') or 0)
+            if not inbound:
+                raise ValueError('invite_inbound_required')
+            key = ('xui', panel_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({
+                'kind': 'xui',
+                'server_id': 0,
+                'protocol': 'xui',
+                'xui_panel_id': panel_id,
+                'xui_inbound_id': inbound,
+            })
+            continue
+        sid = int(src.get('server_id') or 0)
+        if sid < 0 or sid >= len(servers):
+            raise ValueError('Server not found')
+        server = servers[sid]
+        installed = _installed_vpn_keys(server)
+        protocol = (src.get('protocol') or '').strip()
+        if protocol_base(protocol) == 'aivpn' and protocol:
+            if not installed:
+                raise ValueError('no_protocols')
+        elif protocol and protocol in installed:
+            pass
+        elif protocol:
+            matched = next((k for k in installed if protocol_base(k) == protocol_base(protocol)), None)
+            if not matched:
+                raise ValueError('Selected server does not have the required protocol')
+            protocol = matched
+        else:
+            if not installed:
+                raise ValueError('no_protocols')
+            protocol = installed[0]
+        key = ('ssh', sid)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({
+            'kind': 'ssh',
+            'server_id': sid,
+            'protocol': protocol,
+            'xui_panel_id': '',
+            'xui_inbound_id': 0,
+        })
+    if not out:
+        raise ValueError('invite_servers_required')
+    return out
+
+
+def _apply_options_to_link(link: dict, options: list) -> None:
+    link['server_options'] = options
+    first = options[0]
+    link['protocol'] = first.get('protocol') or 'xui'
+    link['server_id'] = int(first.get('server_id') or 0)
+    link['allow_server_choice'] = len(options) > 1
+    xui = next((o for o in options if o.get('kind') == 'xui'), None)
+    if xui:
+        link['xui_panel_id'] = xui.get('xui_panel_id') or ''
+        link['xui_inbound_id'] = int(xui.get('xui_inbound_id') or 0)
+    else:
+        link['xui_panel_id'] = ''
+        link['xui_inbound_id'] = 0
+
+
+def _legacy_invite_options(link: dict, data: Optional[dict]) -> list:
+    protocol = link.get('protocol') or 'xui'
+    if protocol_base(protocol) == 'xui':
+        return [{
+            'kind': 'xui',
+            'server_id': 0,
+            'protocol': 'xui',
+            'xui_panel_id': link.get('xui_panel_id') or '',
+            'xui_inbound_id': int(link.get('xui_inbound_id') or 0),
+        }]
+    allow = bool(link.get('allow_server_choice', True))
+    if allow and data is not None:
+        picked = _pickable_servers_for_protocol(data, protocol)
+        if picked:
+            return [{
+                'kind': 'ssh',
+                'server_id': int(s['id']),
+                'protocol': protocol,
+                'xui_panel_id': '',
+                'xui_inbound_id': 0,
+            } for s in picked]
+    return [{
+        'kind': 'ssh',
+        'server_id': int(link.get('server_id') or 0),
+        'protocol': protocol,
+        'xui_panel_id': '',
+        'xui_inbound_id': 0,
+    }]
+
+
+def _invite_choices(link: dict, data: Optional[dict]) -> list:
+    """Servers the invite holder can pick. `id` is the option index sent back on redeem."""
+    stored = link.get('server_options')
+    options = stored if isinstance(stored, list) and stored else _legacy_invite_options(link, data)
+    if data is None:
+        return []
+    from managers.xui_servers import get_xui_server, ensure_xui_servers
+    settings = data.setdefault('settings', {})
+    ensure_xui_servers(settings)
+    servers = data.get('servers') or []
+    out = []
+    for idx, opt in enumerate(options):
+        if not isinstance(opt, dict):
+            continue
+        kind = opt.get('kind') or 'ssh'
+        protocol = opt.get('protocol') or ''
+        if kind == 'xui' or protocol_base(protocol) == 'xui':
+            panel = get_xui_server(settings, (opt.get('xui_panel_id') or '').strip() or None)
+            if not panel:
+                continue
+            inbound = int(opt.get('xui_inbound_id') or 0) or int(panel.get('default_inbound_id') or 0)
+            if not inbound:
+                continue
+            out.append({
+                'id': idx,
+                'kind': 'xui',
+                'server_id': 0,
+                'name': panel.get('name') or '3x-ui',
+                'host': _url_host(panel.get('url') or ''),
+                'protocol': 'xui',
+                'protocol_label': _invite_proto_label('xui'),
+                'xui_panel_id': panel.get('id') or '',
+                'xui_inbound_id': inbound,
+            })
+            continue
+        sid = int(opt.get('server_id') or 0)
+        if sid < 0 or sid >= len(servers):
+            continue
+        server = servers[sid]
+        installed = _installed_vpn_keys(server)
+        if protocol_base(protocol) == 'aivpn':
+            if not installed:
+                continue
+        elif protocol not in installed and not any(protocol_base(k) == protocol_base(protocol) for k in installed):
+            continue
+        name = server.get('name') or server.get('host') or f'Server {sid + 1}'
+        out.append({
+            'id': idx,
+            'kind': 'ssh',
+            'server_id': sid,
+            'name': name,
+            'host': server.get('host') or '',
+            'protocol': protocol,
+            'protocol_label': _invite_proto_label(protocol),
+            'xui_panel_id': '',
+            'xui_inbound_id': 0,
+        })
+    return out
+
+
+def _resolve_invite_choice(data: dict, link: dict, option_id: Optional[int], requested_server_id: Optional[int]) -> dict:
+    choices = _invite_choices(link, data)
+    if not choices:
+        raise ValueError('Server not found')
+    if option_id is not None:
+        match = next((c for c in choices if int(c['id']) == int(option_id)), None)
+        if not match:
+            raise ValueError('Server not found')
+        return match
+    if len(choices) == 1:
+        return choices[0]
+    if requested_server_id is not None:
+        matches = [
+            c for c in choices
+            if c.get('kind') != 'xui' and int(c.get('server_id') or 0) == int(requested_server_id)
+        ]
+        if len(matches) == 1:
+            return matches[0]
+    raise ValueError('choose_server')
+
+
 def _pickable_servers_for_protocol(data: dict, protocol: str) -> list:
     """Safe server list for end-user pickers (name/host/id only)."""
     out = []
@@ -6199,10 +6464,8 @@ def _invite_public_view(link: dict, data: Optional[dict] = None) -> dict:
     exhausted = remaining is not None and remaining <= 0
     duration_days = int(link.get('duration_days') or 0)
     protocol = link.get('protocol') or 'awg'
-    allow_server_choice = bool(link.get('allow_server_choice', True)) and protocol_base(protocol) != 'xui'
-    servers = []
-    if data is not None and allow_server_choice:
-        servers = _pickable_servers_for_protocol(data, protocol)
+    servers = _invite_choices(link, data) if data is not None else []
+    allow_server_choice = len(servers) > 1
     return {
         'id': link.get('id'),
         'name': link.get('name') or 'Invite',
@@ -6219,6 +6482,9 @@ def _invite_public_view(link: dict, data: Optional[dict] = None) -> dict:
         'server_id': int(link.get('server_id') or 0),
         'allow_server_choice': allow_server_choice,
         'servers': servers,
+        'server_options': link.get('server_options') or [],
+        'xui_inbound_id': int(link.get('xui_inbound_id') or 0),
+        'xui_panel_id': link.get('xui_panel_id') or '',
         'duration_days': duration_days,
         'user_id': link.get('user_id') or '',
         'note': link.get('note') or '',
@@ -6396,10 +6662,15 @@ async def invites_page(request: Request):
     return tpl(
         request,
         'invites.html',
-        invites=[_invite_public_view(x) for x in data.get('invite_links', [])],
+        invites=[_invite_public_view(x, data) for x in data.get('invite_links', [])],
         users=data.get('users', []),
         servers=data.get('servers', []),
         xui_servers=xui_servers,
+        xui_panels=[{
+            'id': s.get('id') or '',
+            'name': s.get('name') or '3x-ui',
+            'default_inbound_id': int(s.get('default_inbound_id') or 0),
+        } for s in xui_servers],
         xui_configured=bool(xui_servers),
         xui_sub_url=(primary or {}).get('sub_url') or '',
         xui_has_sub_url=any_sub,
@@ -6413,7 +6684,7 @@ async def api_list_invites(request: Request):
     if not _check_admin(request):
         return JSONResponse({'error': 'Forbidden'}, status_code=403)
     data = load_data()
-    return {'invites': [_invite_public_view(x) for x in data.get('invite_links', [])]}
+    return {'invites': [_invite_public_view(x, data) for x in data.get('invite_links', [])]}
 
 
 @app.post('/api/invites', tags=["Invites"])
@@ -6427,20 +6698,25 @@ async def api_create_invite(request: Request, req: InviteCreateRequest):
     data = load_data()
     if req.user_id and not any(u['id'] == req.user_id for u in data['users']):
         return JSONResponse({'error': 'User not found'}, status_code=400)
-    protocol = req.protocol or 'xui'
-    inbound_id = int(req.xui_inbound_id or 0)
-    panel_id = (req.xui_panel_id or '').strip()
-    if protocol_base(protocol) == 'xui':
-        from managers.xui_servers import get_xui_server, ensure_xui_servers
-        ensure_xui_servers(data.setdefault('settings', {}))
-        panel = get_xui_server(data.get('settings') or {}, panel_id or None)
-        if not panel:
-            return JSONResponse({'error': 'Add a 3x-ui server in Settings first'}, status_code=400)
-        panel_id = panel.get('id') or ''
-        if not inbound_id:
-            inbound_id = int(panel.get('default_inbound_id') or 0)
-        if not inbound_id:
-            return JSONResponse({'error': 'Select a VLESS inbound from 3x-ui'}, status_code=400)
+    lang = request.cookies.get('lang', 'ru')
+    raw_options = req.server_options
+    if not raw_options:
+        if protocol_base(req.protocol or 'xui') == 'xui':
+            raw_options = [InviteServerOption(
+                kind='xui', protocol='xui',
+                xui_panel_id=req.xui_panel_id or '',
+                xui_inbound_id=int(req.xui_inbound_id or 0),
+            )]
+        else:
+            raw_options = [InviteServerOption(
+                kind='ssh',
+                server_id=int(req.server_id or 0),
+                protocol=req.protocol or 'awg',
+            )]
+    try:
+        options = _normalize_server_options(data, raw_options)
+    except ValueError as ve:
+        return JSONResponse({'error': _t(str(ve), lang)}, status_code=400)
     link = {
         'id': str(uuid.uuid4()),
         'name': (req.name or 'Invite').strip() or 'Invite',
@@ -6449,17 +6725,18 @@ async def api_create_invite(request: Request, req: InviteCreateRequest):
         'max_uses': int(req.max_uses),
         'used_count': 0,
         'user_id': req.user_id or '',
-        'protocol': protocol,
-        'server_id': int(req.server_id or 0),
-        'xui_inbound_id': inbound_id,
-        'xui_panel_id': panel_id,
+        'protocol': 'xui',
+        'server_id': 0,
+        'xui_inbound_id': 0,
+        'xui_panel_id': '',
         'password_hash': hash_password(req.password) if req.password else None,
         'expires_at': None,
         'duration_days': int(req.duration_days or 0),
         'note': req.note or '',
-        'allow_server_choice': bool(req.allow_server_choice),
+        'allow_server_choice': len(options) > 1,
         'created_at': datetime.now().isoformat(),
     }
+    _apply_options_to_link(link, options)
     data.setdefault('invite_links', []).append(link)
     save_data(data)
     view = _invite_public_view(link, data)
@@ -6484,14 +6761,26 @@ async def api_update_invite(request: Request, invite_id: str, req: InviteUpdateR
         if req.user_id and not any(u['id'] == req.user_id for u in data['users']):
             return JSONResponse({'error': 'User not found'}, status_code=400)
         link['user_id'] = req.user_id
-    if req.protocol is not None:
-        link['protocol'] = req.protocol
-    if req.server_id is not None:
-        link['server_id'] = int(req.server_id)
-    if req.xui_inbound_id is not None:
-        link['xui_inbound_id'] = int(req.xui_inbound_id)
-    if req.xui_panel_id is not None:
-        link['xui_panel_id'] = (req.xui_panel_id or '').strip()
+    if req.server_options is not None:
+        try:
+            options = _normalize_server_options(data, req.server_options)
+        except ValueError as ve:
+            lang = request.cookies.get('lang', 'ru')
+            return JSONResponse({'error': _t(str(ve), lang)}, status_code=400)
+        _apply_options_to_link(link, options)
+    else:
+        if req.protocol is not None:
+            link['protocol'] = req.protocol
+        if req.server_id is not None:
+            link['server_id'] = int(req.server_id)
+        if req.xui_inbound_id is not None:
+            link['xui_inbound_id'] = int(req.xui_inbound_id)
+        if req.xui_panel_id is not None:
+            link['xui_panel_id'] = (req.xui_panel_id or '').strip()
+        if req.allow_server_choice is not None:
+            link['allow_server_choice'] = bool(req.allow_server_choice)
+        if any(v is not None for v in (req.protocol, req.server_id, req.xui_inbound_id, req.xui_panel_id)):
+            link['server_options'] = []
     if req.duration_days is not None:
         if req.duration_days < 0:
             return JSONResponse({'error': 'duration_days must be >= 0'}, status_code=400)
@@ -6504,8 +6793,6 @@ async def api_update_invite(request: Request, invite_id: str, req: InviteUpdateR
         link['note'] = req.note
     if req.enabled is not None:
         link['enabled'] = bool(req.enabled)
-    if req.allow_server_choice is not None:
-        link['allow_server_choice'] = bool(req.allow_server_choice)
     if req.reset_used:
         link['used_count'] = 0
     if protocol_base(link.get('protocol') or 'xui') == 'xui':
@@ -6674,21 +6961,19 @@ async def api_invite_create_config(token: str, req: InviteRedeemRequest, request
     if not holder_id or not any(u['id'] == holder_id for u in data['users']):
         return JSONResponse({'error': 'Invite holder user is not configured'}, status_code=400)
 
-    protocol = link.get('protocol') or 'xui'
-    allow_choice = bool(link.get('allow_server_choice', True))
+    lang = request.cookies.get('lang', 'ru')
     try:
-        if protocol_base(protocol) == 'xui':
-            sid = int(link.get('server_id') or 0)
-        else:
-            sid = _resolve_chosen_server_id(
-                data,
-                protocol=protocol,
-                default_server_id=int(link.get('server_id') or 0),
-                requested_server_id=req.server_id,
-                allow_choice=allow_choice,
-            )
+        choice = _resolve_invite_choice(
+            data, link,
+            option_id=req.option_id,
+            requested_server_id=req.server_id,
+        )
     except ValueError as ve:
-        return JSONResponse({'error': str(ve)}, status_code=400)
+        return JSONResponse({'error': _t(str(ve), lang)}, status_code=400)
+    protocol = choice.get('protocol') or 'xui'
+    sid = int(choice.get('server_id') or 0)
+    choice_inbound = int(choice.get('xui_inbound_id') or 0) or None
+    choice_panel = choice.get('xui_panel_id') or None
 
     # Reserve a use slot under lock
     async with DATA_LOCK:
@@ -6706,7 +6991,6 @@ async def api_invite_create_config(token: str, req: InviteRedeemRequest, request
     name = f"{name}_{secrets.token_hex(3)}"
     try:
         data = load_data()
-        protocol = link.get('protocol') or 'xui'
         if protocol_base(protocol) == 'aivpn' and sid < len(data.get('servers') or []):
             from managers.aivpn_manager import resolve_provision_protocol
             protocol = resolve_provision_protocol(data['servers'][sid], 'aivpn')
@@ -6717,8 +7001,8 @@ async def api_invite_create_config(token: str, req: InviteRedeemRequest, request
             protocol=protocol,
             name=name,
             server_id=sid,
-            xui_inbound_id=int(link.get('xui_inbound_id') or 0) or None,
-            xui_panel_id=link.get('xui_panel_id') or None,
+            xui_inbound_id=choice_inbound,
+            xui_panel_id=choice_panel,
             duration_days=int(link.get('duration_days') or 0),
         )
         conn = {
@@ -6729,7 +7013,7 @@ async def api_invite_create_config(token: str, req: InviteRedeemRequest, request
             'client_id': created['client_id'],
             'name': name,
             'invite_id': link.get('id'),
-            'xui_panel_id': created.get('xui_panel_id') or link.get('xui_panel_id') or '',
+            'xui_panel_id': created.get('xui_panel_id') or choice_panel or '',
             'created_at': datetime.now().isoformat(),
         }
         if created.get('expires_at'):
