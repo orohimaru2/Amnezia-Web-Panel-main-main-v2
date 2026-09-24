@@ -366,10 +366,17 @@
                         ${typeof uiIcon === 'function' ? uiIcon('copy') : '📋'}
                         <span class="share-copy-label">${_('copy_key_big')}</span>
                     </button>
-                    <button type="button" class="share-link-btn"
-                        onclick="showDetails('${escAttr(c.id)}', '${escAttr(c.name)}')">
-                        ${_('more_qr_download')}
-                    </button>
+                    <div class="share-card-links">
+                        <button type="button" class="share-link-btn"
+                            onclick="showDetails('${escAttr(c.id)}', '${escAttr(c.name)}')">
+                            ${_('more_qr_download')}
+                        </button>
+                        <button type="button" class="share-link-btn share-delete-btn"
+                            onclick="deleteInviteConfig('${escAttr(c.id)}')">
+                            ${typeof uiIcon === 'function' ? uiIcon('trash') : ''}
+                            ${_('invite_delete_config')}
+                        </button>
+                    </div>
                 </article>
             `).join('');
         } catch (err) {
@@ -391,6 +398,22 @@
         } finally {
             btn.disabled = false;
             if (label) label.textContent = prev || _('copy_key_big');
+        }
+    }
+
+    async function deleteInviteConfig(connId) {
+        if (!confirm(_('invite_delete_config_confirm'))) return;
+        try {
+            const res = await fetch(`/api/invite/${TOKEN}/connections/${encodeURIComponent(connId)}/delete`, {
+                method: 'POST',
+            });
+            const data = await res.json();
+            if (!res.ok || data.error) throw new Error(data.error || _('error'));
+            showToast(_('invite_config_deleted'), 'success');
+            if (data.invite) updateStatus(data.invite);
+            await loadConnections();
+        } catch (err) {
+            alert(`${_('error')}: ` + err.message);
         }
     }
 
@@ -465,9 +488,12 @@
     .share-card-name { font-weight: 600; }
     .share-card-meta { font-size: 0.8rem; color: var(--text-muted); margin-top: 2px; }
     .share-btn-lg { width: 100%; justify-content: center; min-height: 48px; }
+    .share-card-links { display: flex; align-items: center; justify-content: space-between; gap: var(--space-sm); }
     .share-link-btn {
         background: none; border: none; color: var(--accent); cursor: pointer; font-size: 0.85rem; padding: 4px 0;
+        display: inline-flex; align-items: center; gap: 4px;
     }
+    .share-delete-btn { color: #ef4444; }
     .share-loading, .share-empty { text-align: center; color: var(--text-muted); padding: var(--space-lg) 0; }
     .share-modal { max-width: 420px; }
     .share-modal-body { padding: var(--space-md) var(--space-lg) var(--space-lg); display: flex; flex-direction: column; gap: var(--space-md); }

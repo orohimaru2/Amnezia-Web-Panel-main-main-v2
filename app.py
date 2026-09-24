@@ -6555,6 +6555,37 @@ async def _fetch_connection_config_payload(data: dict, conn: dict, expires_at: O
     return {'config': config, 'vpn_link': vpn_link, 'expires_at': expires_at}
 
 
+async def _delete_remote_client(data: dict, conn: dict) -> None:
+    """Remove the VPN client that backs an invite config."""
+    if protocol_base(conn.get('protocol', '')) == 'xui':
+        from managers.xui_api import xui_delete_client
+        await xui_delete_client(
+            data.get('settings', {}),
+            conn['client_id'],
+            panel_id=conn.get('xui_panel_id') or None,
+        )
+        return
+    sid = int(conn.get('server_id') or 0)
+    servers = data.get('servers') or []
+    if sid < 0 or sid >= len(servers):
+        raise RuntimeError('Server not found')
+    server = servers[sid]
+    protocol = conn['protocol']
+    client_id = conn['client_id']
+
+    def _remove():
+        ssh = get_ssh(server)
+        ssh.connect()
+        try:
+            manager = get_protocol_manager(ssh, protocol)
+            _manager_call(manager, 'remove_client', protocol, client_id)
+        finally:
+            ssh.disconnect()
+
+    await asyncio.to_thread(_remove)
+    invalidate_server_reads(sid, protocol)
+
+
 def _expiry_ms_from_duration_days(duration_days: int) -> int:
     """3x-ui expiryTime is unix ms; 0 means no expiry. Starts now (on redeem)."""
     days = int(duration_days or 0)
@@ -6938,6 +6969,48 @@ async def api_invite_config(token: str, connection_id: str, request: Request):
     except Exception as e:
         logger.exception('Error getting invite config')
         return JSONResponse({'error': str(e)}, status_code=500)
+
+
+@app.post('/api/invite/{token}/connections/{connection_id}/delete', tags=["Invites"])
+async def api_invite_delete_config(token: str, connection_id: str, request: Request):
+    """Delete a config created from this invite and return one use so another server can be chosen."""
+    data = load_data()
+    link = _find_invite(data, token)
+    if not link:
+        return JSONResponse({'error': 'Not found'}, status_code=404)
+    if not _invite_auth_ok(link, request):
+        return JSONResponse({'error': 'Unauthorized'}, status_code=401)
+    invite_id = link.get('id')
+    holder_id = link.get('user_id') or ''
+    conn = next(
+        (
+            c for c in data.get('user_connections', [])
+            if c.get('id') == connection_id
+            and c.get('invite_id') == invite_id
+            and (not holder_id or c.get('user_id') == holder_id)
+        ),
+        None,
+    )
+    if not conn:
+        return JSONResponse({'error': 'Not found'}, status_code=404)
+    try:
+        await _delete_remote_client(data, conn)
+    except Exception as e:
+        logger.exception('Error deleting invite config')
+        return JSONResponse({'error': str(e)}, status_code=500)
+
+    async with DATA_LOCK:
+        data = load_data()
+        link = _find_invite(data, token)
+        data['user_connections'] = [
+            c for c in data.get('user_connections', [])
+            if c.get('id') != connection_id
+        ]
+        if link and int(link.get('used_count') or 0) > 0:
+            link['used_count'] = int(link['used_count']) - 1
+        save_data(data)
+        view = _invite_public_view(link, data) if link else None
+    return {'status': 'success', 'invite': view}
 
 
 @app.post('/api/invite/{token}/create', tags=["Invites"])
