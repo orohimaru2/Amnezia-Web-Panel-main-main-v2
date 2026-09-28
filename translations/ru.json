@@ -583,6 +583,7 @@
     "aivpn_picking":  "Оценка протоколов…",
     "aivpn_on":  "Вкл",
     "aivpn_protocol_option":  "AIVPN (авто)",
+    "choose_protocol":  "Выберите протокол",
     "choose_server":  "Выберите сервер",
     "allow_server_choice":  "Разрешить пользователю выбрать сервер",
     "allow_server_choice_hint":  "Пользователь сам выбирает сервер при создании конфига. Сервер по умолчанию — запасной вариант.",

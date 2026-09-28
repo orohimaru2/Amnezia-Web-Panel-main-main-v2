@@ -530,6 +530,7 @@
     "aivpn_picking":  "Scoring protocols…",
     "aivpn_on":  "On",
     "aivpn_protocol_option":  "AIVPN (auto)",
+    "choose_protocol":  "选择协议",
     "choose_server":  "Choose server",
     "allow_server_choice":  "Allow user to choose server",
     "allow_server_choice_hint":  "End users pick a server when creating a config. Default server is used as fallback.",

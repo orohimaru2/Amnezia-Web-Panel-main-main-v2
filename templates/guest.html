@@ -34,6 +34,11 @@
     <div id="connectionsList">
         {% if allow_create %}
         <div class="share-create">
+            <div id="guestProtocolPickWrap" class="guest-server-menu" style="display:none;">
+                <label class="form-label">{{ _('choose_protocol') }}</label>
+                <div id="guestProtocolMenu" class="guest-proto-menu"></div>
+                <select id="guestProtocolPick" class="hidden" aria-hidden="true"></select>
+            </div>
             <div id="guestServerPickWrap" class="guest-server-menu" style="display:none;">
                 <label class="form-label">{{ _('choose_server') }}</label>
                 <div id="guestServerMenu" class="guest-server-menu__list"></div>
@@ -189,7 +194,7 @@
             const data = await res.json();
             document.getElementById('loadingState').classList.add('hidden');
 
-            renderGuestServers(data.servers || [], data.default_server_id);
+            renderGuestProtocols(data.protocols || [], data.default_protocol, data.servers || [], data.default_server_id);
 
             const traffic = data.traffic || {};
             const note = document.getElementById('guestTrafficNote');
@@ -247,6 +252,59 @@
         }
     }
 
+    let guestServerRows = [];
+
+    function serversForProtocol(protocolId) {
+        const family = (protocolId === 'awg' || protocolId === 'awg2') ? ['awg', 'awg2'] : [protocolId];
+        return guestServerRows.filter(s => (s.protocols || []).some(p => family.includes(p)));
+    }
+
+    function selectGuestProtocol(id) {
+        const sel = document.getElementById('guestProtocolPick');
+        if (sel) sel.value = String(id);
+        document.querySelectorAll('.guest-proto-item').forEach(el => {
+            el.classList.toggle('is-active', el.dataset.id === String(id));
+        });
+        const currentServer = document.getElementById('guestServerPick')?.value;
+        renderGuestServers(serversForProtocol(String(id)), currentServer);
+    }
+
+    function renderGuestProtocols(protocols, defaultId, servers, defaultServerId) {
+        guestServerRows = servers || [];
+        const wrap = document.getElementById('guestProtocolPickWrap');
+        const menu = document.getElementById('guestProtocolMenu');
+        const sel = document.getElementById('guestProtocolPick');
+        if (!wrap || !menu || !sel) {
+            renderGuestServers(guestServerRows, defaultServerId);
+            return;
+        }
+        if (!protocols.length) {
+            wrap.style.display = 'none';
+            menu.innerHTML = '';
+            sel.innerHTML = '';
+            renderGuestServers(guestServerRows, defaultServerId);
+            return;
+        }
+        sel.innerHTML = '';
+        menu.innerHTML = '';
+        protocols.forEach(p => {
+            const opt = document.createElement('option');
+            opt.value = String(p.id);
+            opt.textContent = p.label || p.id;
+            sel.appendChild(opt);
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'guest-proto-item';
+            btn.dataset.id = String(p.id);
+            btn.textContent = p.label || p.id;
+            btn.addEventListener('click', () => selectGuestProtocol(p.id));
+            menu.appendChild(btn);
+        });
+        const known = protocols.some(p => String(p.id) === String(defaultId));
+        selectGuestProtocol(known ? defaultId : protocols[0].id);
+        wrap.style.display = '';
+    }
+
     function selectGuestServer(id) {
         const sel = document.getElementById('guestServerPick');
         if (sel) sel.value = String(id);
@@ -298,6 +356,11 @@
         spinner.classList.remove('hidden');
         try {
             const body = { name: 'Guest VPN' };
+            const protoSel = document.getElementById('guestProtocolPick');
+            const protoWrap = document.getElementById('guestProtocolPickWrap');
+            if (protoWrap && protoWrap.style.display !== 'none' && protoSel && protoSel.value) {
+                body.protocol = protoSel.value;
+            }
             const wrap = document.getElementById('guestServerPickWrap');
             const sel = document.getElementById('guestServerPick');
             if (wrap && wrap.style.display !== 'none' && sel && sel.value !== '') {
@@ -426,6 +489,24 @@
     .guest-server-menu {
         text-align: left;
         margin-bottom: var(--space-sm);
+    }
+    .guest-proto-menu {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 8px;
+    }
+    .guest-proto-item {
+        padding: 8px 12px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: var(--bg-secondary);
+        color: var(--text-primary);
+        cursor: pointer;
+    }
+    .guest-proto-item.is-active {
+        border-color: var(--accent);
+        background: var(--accent-glow);
     }
     .guest-server-menu__list {
         display: flex;

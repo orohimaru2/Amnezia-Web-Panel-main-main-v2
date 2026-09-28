@@ -179,7 +179,11 @@
                 <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
                     <input type="checkbox" class="evilfox-server" value="{{ loop.index0 }}"
                         {% if settings.guest.evilfox_server_ids is defined and loop.index0 in settings.guest.evilfox_server_ids %}checked{% endif %}>
-                    <span>{{ s.name or s.host }} <span class="form-hint" style="display:inline;">({{ s.host }})</span></span>
+                    <span>{{ s.name or s.host }} <span class="form-hint" style="display:inline;">({{ s.host }})</span>
+                        {% if server_proto_labels[loop.index0] %}
+                        <span class="form-hint" style="display:block;">{{ server_proto_labels[loop.index0]|join(', ') }}</span>
+                        {% endif %}
+                    </span>
                 </label>
                 {% else %}
                 <div class="form-hint">{{ _('no_servers') }}</div>

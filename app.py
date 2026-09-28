@@ -2582,6 +2582,7 @@ class ShareAuthRequest(BaseModel):
 class GuestCreateRequest(BaseModel):
     name: str = 'Guest VPN'
     server_id: Optional[int] = None
+    protocol: Optional[str] = None
 
 
 class IssueGuestLinkRequest(BaseModel):
@@ -2593,6 +2594,7 @@ class IssueGuestLinkRequest(BaseModel):
     external_ref: str = ''
     reuse_only: bool = False
     use_panel_servers: bool = False
+    expires_at: str = ''
 
 
 class InviteServerOption(BaseModel):
@@ -6002,6 +6004,37 @@ def _bump_guest_traffic(data: dict, user_id: str, delta: int) -> bool:
     return exhausted
 
 
+def _guest_expires_iso(value: Optional[str]) -> Optional[str]:
+    """Normalize a site subscription end into the panel's naive local ISO datetime."""
+    text = (value or '').strip()
+    if not text:
+        return None
+    if text.endswith('Z'):
+        text = text[:-1] + '+00:00'
+    if ' ' in text and 'T' not in text:
+        text = text.replace(' ', 'T', 1)
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone().replace(tzinfo=None)
+    if parsed.year >= 9000:
+        return None
+    return parsed.isoformat(timespec='seconds')
+
+
+def _set_guest_user_expiration(data: dict, user_id: str, expires_iso: Optional[str]) -> None:
+    if not user_id or not expires_iso:
+        return
+    for user in data.get('users') or []:
+        if user.get('id') == user_id:
+            user['expiration_date'] = expires_iso
+            user['expire_after_first_use'] = False
+            user['expiration_days'] = 0
+            return
+
+
 def _evilfox_allowed_ids(data: dict) -> List[int]:
     """Servers the admin marked for evilfox.win guest links."""
     raw = ((data.get('settings') or {}).get('guest') or {}).get('evilfox_server_ids') or []
@@ -6041,6 +6074,52 @@ def _issued_guest_settings(link: dict, data: Optional[dict] = None) -> dict:
     if allowed and view['create_server_id'] not in allowed:
         view['create_server_id'] = allowed[0]
     return view
+
+
+def _server_client_protocols(server: dict) -> list:
+    seen = []
+    for key in _installed_vpn_keys(server):
+        base = protocol_base(key)
+        if base not in seen:
+            seen.append(base)
+    return seen
+
+
+def _guest_catalog(data: dict, guest: dict) -> tuple:
+    """Servers and protocols a guest may pick. Empty allowed list means every server."""
+    all_servers = data.get('servers') or []
+    marked = []
+    for item in guest.get('allowed_server_ids') or []:
+        try:
+            sid = int(item)
+        except (TypeError, ValueError):
+            continue
+        if sid not in marked:
+            marked.append(sid)
+    indexes = marked if marked else list(range(len(all_servers)))
+    rows = []
+    proto_ids = []
+    for idx in indexes:
+        if idx < 0 or idx >= len(all_servers) or not isinstance(all_servers[idx], dict):
+            continue
+        protos = _server_client_protocols(all_servers[idx])
+        if not protos:
+            continue
+        server = all_servers[idx]
+        rows.append({
+            'id': idx,
+            'name': server.get('name') or server.get('host') or f'Server {idx + 1}',
+            'host': server.get('host') or '',
+            'protocols': protos,
+        })
+        for proto in protos:
+            if proto not in proto_ids:
+                proto_ids.append(proto)
+    preferred = protocol_base(guest.get('create_protocol') or '')
+    family = _protocol_family(preferred) if preferred else set()
+    default_protocol = next((p for p in proto_ids if p in family), proto_ids[0] if proto_ids else preferred)
+    protocols = [{'id': p, 'label': _invite_proto_label(p)} for p in proto_ids]
+    return rows, protocols, default_protocol
 
 
 def _guest_choice_servers(data: dict, guest: dict) -> list:
@@ -6231,15 +6310,19 @@ async def api_guest_connections(token: str, request: Request):
         return err
     protocol = guest.get('create_protocol') or 'xui'
     show_servers = bool(guest.get('issued')) or bool(guest.get('allowed_server_ids')) or bool(guest.get('create_allow_server_choice', True))
-    servers = _guest_choice_servers(data, guest) if (
-        guest.get('allow_create') and protocol_base(protocol) != 'xui' and show_servers
-    ) else []
+    if guest.get('allow_create') and protocol_base(protocol) != 'xui' and show_servers:
+        servers, protocols, default_protocol = _guest_catalog(data, guest)
+    else:
+        servers, protocols, default_protocol = [], [], protocol
     default_server_id = int(guest.get('create_server_id') or 0)
     if servers and all(int(s.get('id')) != default_server_id for s in servers):
         default_server_id = int(servers[0]['id'])
     meta = {
         'allow_create': bool(guest.get('allow_create')),
         'create_protocol': protocol,
+        'allow_protocol_choice': len(protocols) >= 1,
+        'default_protocol': default_protocol,
+        'protocols': protocols,
         'allow_server_choice': len(servers) >= 1,
         'default_server_id': default_server_id,
         'servers': servers,
@@ -6292,12 +6375,16 @@ async def api_guest_create(token: str, req: GuestCreateRequest, request: Request
     if not holder:
         return JSONResponse({'error': 'Guest user is not configured in settings'}, status_code=400)
 
-    protocol = guest.get('create_protocol') or 'xui'
+    requested = (req.protocol or guest.get('create_protocol') or 'xui').strip() or 'xui'
     name = (req.name or 'Guest VPN').strip() or 'Guest VPN'
     # Unique-ish name to avoid collisions
     name = f"{name}_{secrets.token_hex(3)}"
     show_servers = bool(guest.get('issued')) or bool(guest.get('allowed_server_ids')) or bool(guest.get('create_allow_server_choice', True))
-    choice_servers = _guest_choice_servers(data, guest) if protocol_base(protocol) != 'xui' and show_servers else []
+    catalog, protocol_options, default_protocol = _guest_catalog(data, guest) if protocol_base(requested) != 'xui' and show_servers else ([], [], requested)
+    offered = [p['id'] for p in protocol_options]
+    family = _protocol_family(requested)
+    protocol = next((p for p in offered if p in family), default_protocol or requested)
+    choice_servers = [row for row in catalog if any(p in _protocol_family(protocol) for p in row.get('protocols') or [])]
     allow_choice = len(choice_servers) >= 1
     if choice_servers and int(guest.get('create_server_id') or 0) not in {int(s['id']) for s in choice_servers}:
         guest['create_server_id'] = int(choice_servers[0]['id'])
@@ -6319,7 +6406,7 @@ async def api_guest_create(token: str, req: GuestCreateRequest, request: Request
                     default_server_id=int(guest.get('create_server_id') or 0),
                     requested_server_id=req.server_id,
                     allow_choice=allow_choice,
-                    allowed_ids=guest.get('allowed_server_ids') or None,
+                    allowed_ids=[int(row['id']) for row in choice_servers] or None,
                 )
             except ValueError as ve:
                 return JSONResponse({'error': str(ve)}, status_code=400)
@@ -6431,6 +6518,7 @@ async def api_issue_guest_link(request: Request, req: IssueGuestLinkRequest):
         limit_gb = 0
     limit_bytes = int(limit_gb * (1024 ** 3))
     server_id = int(req.server_id or 0)
+    expires_iso = _guest_expires_iso(req.expires_at)
 
     reenable_uid = ''
     async with DATA_LOCK:
@@ -6448,6 +6536,9 @@ async def api_issue_guest_link(request: Request, req: IssueGuestLinkRequest):
             user_id = existing.get('user_id') or ''
             if not token:
                 return JSONResponse({'error': 'Guest link not found'}, status_code=404)
+            if expires_iso and user_id:
+                _set_guest_user_expiration(data, user_id, expires_iso)
+                save_data(data)
             url = _guest_public_url(request, token)
             return {
                 'status': 'success',
@@ -6458,13 +6549,20 @@ async def api_issue_guest_link(request: Request, req: IssueGuestLinkRequest):
                 'protocol': existing.get('create_protocol') or protocol,
             }
         marked_ids = _evilfox_allowed_ids(data)
-        pickable_ids = [int(s['id']) for s in _pickable_servers_for_protocol(data, protocol)]
-        allowed_ids = [sid for sid in marked_ids if sid in pickable_ids] if marked_ids else pickable_ids
-        if req.use_panel_servers and not allowed_ids:
+        catalog, _protocol_options, default_protocol = _guest_catalog(
+            data,
+            {'allowed_server_ids': marked_ids, 'create_protocol': protocol},
+        )
+        if req.use_panel_servers and not catalog:
             return JSONResponse(
-                {'error': 'Нет серверов с этим протоколом. Добавьте сервер в панели или отметьте его в «Серверы для пользователей».'},
+                {'error': 'Нет серверов с VPN-протоколом. Добавьте сервер в панели или отметьте его в «Серверы для пользователей».'},
                 status_code=400,
             )
+        family = _protocol_family(protocol)
+        matched_ids = [int(row['id']) for row in catalog if any(p in family for p in row.get('protocols') or [])]
+        allowed_ids = matched_ids or [int(row['id']) for row in catalog]
+        if not matched_ids and default_protocol:
+            protocol = default_protocol
         if allowed_ids and server_id not in allowed_ids:
             server_id = allowed_ids[0]
         if protocol_base(protocol) != 'xui':
@@ -6474,7 +6572,7 @@ async def api_issue_guest_link(request: Request, req: IssueGuestLinkRequest):
         if existing:
             user_id = existing.get('user_id') or ''
             if not user_id or not any(u.get('id') == user_id for u in data.get('users', [])):
-                user_id = _create_guest_link_user(data, name, external_ref)
+                user_id = _create_guest_link_user(data, name, external_ref, expires_iso)
                 existing['user_id'] = user_id
             existing['name'] = name
             existing['create_protocol'] = protocol
@@ -6492,9 +6590,11 @@ async def api_issue_guest_link(request: Request, req: IssueGuestLinkRequest):
                 reenable_uid = user_id
             token = existing.get('token') or secrets.token_urlsafe(16)
             existing['token'] = token
+            if expires_iso and user_id:
+                _set_guest_user_expiration(data, user_id, expires_iso)
             save_data(data)
         else:
-            user_id = _create_guest_link_user(data, name, external_ref)
+            user_id = _create_guest_link_user(data, name, external_ref, expires_iso)
             token = secrets.token_urlsafe(16)
             links.append({
                 'id': str(uuid.uuid4()),
@@ -6527,7 +6627,7 @@ async def api_issue_guest_link(request: Request, req: IssueGuestLinkRequest):
     }
 
 
-def _create_guest_link_user(data: dict, name: str, external_ref: str) -> str:
+def _create_guest_link_user(data: dict, name: str, external_ref: str, expires_iso: Optional[str] = None) -> str:
     taken = {u.get('username') for u in data.get('users', [])}
     username = 'gst_' + secrets.token_hex(4)
     while username in taken:
@@ -6546,7 +6646,7 @@ def _create_guest_link_user(data: dict, name: str, external_ref: str) -> str:
         'traffic_used': 0,
         'traffic_total': 0,
         'last_reset_at': datetime.now().isoformat(),
-        'expiration_date': None,
+        'expiration_date': expires_iso,
         'expire_after_first_use': False,
         'expiration_days': 0,
         'enabled': True,
@@ -6557,11 +6657,20 @@ def _create_guest_link_user(data: dict, name: str, external_ref: str) -> str:
 
 # ======================== Invite links (limited config creation) ========================
 
+def _protocol_family(protocol: str) -> set:
+    """AWG 2.0 is stored as awg or awg2 depending on the panel version."""
+    base = protocol_base(protocol)
+    if base in ('awg', 'awg2'):
+        return {'awg', 'awg2'}
+    return {base}
+
+
 def _server_supports_protocol(server: dict, protocol: str) -> bool:
     """True if server has an installed client VPN matching protocol (or any for aivpn)."""
     base = protocol_base(protocol)
     if base == 'xui':
         return False
+    family = _protocol_family(protocol)
     protocols = server.get('protocols') or {}
     for key, info in protocols.items():
         if not isinstance(info, dict) or not info.get('installed'):
@@ -6569,7 +6678,7 @@ def _server_supports_protocol(server: dict, protocol: str) -> bool:
         kb = protocol_base(key)
         if kb not in CLIENT_VPN_BASES or kb == 'xui':
             continue
-        if base == 'aivpn' or kb == base or key == protocol:
+        if base == 'aivpn' or kb in family or key == protocol:
             return True
     return False
 
@@ -6582,14 +6691,17 @@ def _match_protocol_on_server(server: dict, protocol: str) -> str:
     base = protocol_base(protocol)
     if base == 'aivpn':
         return protocol
+    family = _protocol_family(protocol)
     candidates = [
         key for key, info in protocols.items()
-        if isinstance(info, dict) and info.get('installed') and protocol_base(key) == base
+        if isinstance(info, dict) and info.get('installed') and protocol_base(key) in family
     ]
     if not candidates:
         return protocol
-    candidates.sort()
-    return candidates[0]
+    same = [key for key in candidates if protocol_base(key) == base]
+    pool = same or candidates
+    pool.sort()
+    return pool[0]
 
 
 _INVITE_PROTO_LABELS = {
@@ -7658,11 +7770,16 @@ async def settings_page(request: Request):
     if before != after:
         save_data(data)
     xui_servers = [public_server_view(s) for s in list_xui_servers(settings)]
+    server_proto_labels = [
+        [protocol_display_name(p) for p in _server_client_protocols(s if isinstance(s, dict) else {})]
+        for s in (data.get('servers') or [])
+    ]
     return tpl(
         request,
         'settings.html',
         settings=data.get('settings', {}),
         servers=data.get('servers', []),
+        server_proto_labels=server_proto_labels,
         users=data.get('users', []),
         xui_servers=xui_servers,
         current_version=CURRENT_VERSION,
