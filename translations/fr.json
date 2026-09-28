@@ -218,6 +218,8 @@
     "guest_password_keep":  "Laisser vide pour conserver",
     "guest_clear_password":  "Retirer le mot de passe",
     "guest_allow_create":  "Autoriser la création d\u0027une config",
+    "evilfox_servers_label":  "Serveurs pour les liens evilfox.win",
+    "evilfox_servers_hint":  "Les serveurs cochés sont proposés sur le lien invité. Liste vide : le serveur envoyé par le site est conservé.",
     "guest_traffic_limit":  "Limite de trafic, Go",
     "guest_traffic_limit_hint":  "0 = illimité. Compte le trafic des configs de l'utilisateur invité. Elles sont désactivées une fois la limite atteinte.",
     "guest_traffic_used":  "Déjà utilisé",

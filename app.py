@@ -2507,6 +2507,7 @@ class GuestSettings(BaseModel):
     create_xui_panel_id: str = ''
     create_allow_server_choice: bool = True
     traffic_limit: Optional[float] = 0
+    evilfox_server_ids: List[int] = []
 
 
 class DonateMethodSettings(BaseModel):
@@ -2590,6 +2591,7 @@ class IssueGuestLinkRequest(BaseModel):
     traffic_limit_gb: float = 0
     allow_server_choice: bool = False
     external_ref: str = ''
+    reuse_only: bool = False
 
 
 class InviteServerOption(BaseModel):
@@ -5999,8 +6001,23 @@ def _bump_guest_traffic(data: dict, user_id: str, delta: int) -> bool:
     return exhausted
 
 
-def _issued_guest_settings(link: dict) -> dict:
-    return {
+def _evilfox_allowed_ids(data: dict) -> List[int]:
+    """Servers the admin marked for evilfox.win guest links."""
+    raw = ((data.get('settings') or {}).get('guest') or {}).get('evilfox_server_ids') or []
+    servers = data.get('servers') or []
+    out: List[int] = []
+    for item in raw:
+        try:
+            sid = int(item)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= sid < len(servers) and sid not in out:
+            out.append(sid)
+    return out
+
+
+def _issued_guest_settings(link: dict, data: Optional[dict] = None) -> dict:
+    view = {
         'enabled': bool(link.get('enabled', True)),
         'token': link.get('token') or '',
         'password_hash': None,
@@ -6015,7 +6032,33 @@ def _issued_guest_settings(link: dict) -> dict:
         'traffic_used': int(link.get('traffic_used') or 0),
         'disabled_by_traffic': bool(link.get('disabled_by_traffic')),
         'issued': True,
+        'allowed_server_ids': [],
     }
+    allowed = _evilfox_allowed_ids(data) if data is not None else []
+    if not allowed:
+        for item in link.get('allowed_server_ids') or []:
+            try:
+                sid = int(item)
+            except (TypeError, ValueError):
+                continue
+            if sid not in allowed:
+                allowed.append(sid)
+    if allowed:
+        view['allowed_server_ids'] = allowed
+        if view['create_server_id'] not in allowed:
+            view['create_server_id'] = allowed[0]
+        view['create_allow_server_choice'] = len(allowed) > 1
+    return view
+
+
+def _guest_choice_servers(data: dict, guest: dict) -> list:
+    protocol = guest.get('create_protocol') or 'awg'
+    servers = _pickable_servers_for_protocol(data, protocol)
+    allowed = guest.get('allowed_server_ids') or []
+    if allowed:
+        allow_set = {int(x) for x in allowed}
+        servers = [s for s in servers if int(s.get('id')) in allow_set]
+    return servers
 
 
 def _guest_by_token(data: dict, token: str) -> Optional[dict]:
@@ -6024,7 +6067,7 @@ def _guest_by_token(data: dict, token: str) -> Optional[dict]:
         return guest
     for link in ((data.get('settings') or {}).get('guest_links') or []):
         if isinstance(link, dict) and link.get('token') == token:
-            return _issued_guest_settings(link)
+            return _issued_guest_settings(link, data)
     return None
 
 
@@ -6194,16 +6237,19 @@ async def api_guest_connections(token: str, request: Request):
     data, guest, holder, err = _resolve_guest(token, request)
     if err:
         return err
-    allow_choice = bool(guest.get('create_allow_server_choice', True))
     protocol = guest.get('create_protocol') or 'xui'
-    servers = _pickable_servers_for_protocol(data, protocol) if (
-        guest.get('allow_create') and allow_choice and protocol_base(protocol) != 'xui'
+    servers = _guest_choice_servers(data, guest) if (
+        guest.get('allow_create') and protocol_base(protocol) != 'xui'
+        and (guest.get('allowed_server_ids') or guest.get('create_allow_server_choice', True))
     ) else []
+    default_server_id = int(guest.get('create_server_id') or 0)
+    if servers and all(int(s.get('id')) != default_server_id for s in servers):
+        default_server_id = int(servers[0]['id'])
     meta = {
         'allow_create': bool(guest.get('allow_create')),
         'create_protocol': protocol,
-        'allow_server_choice': bool(servers),
-        'default_server_id': int(guest.get('create_server_id') or 0),
+        'allow_server_choice': len(servers) > 1,
+        'default_server_id': default_server_id,
         'servers': servers,
     }
     if not holder:
@@ -6258,7 +6304,10 @@ async def api_guest_create(token: str, req: GuestCreateRequest, request: Request
     name = (req.name or 'Guest VPN').strip() or 'Guest VPN'
     # Unique-ish name to avoid collisions
     name = f"{name}_{secrets.token_hex(3)}"
-    allow_choice = bool(guest.get('create_allow_server_choice', True))
+    choice_servers = _guest_choice_servers(data, guest) if guest.get('allowed_server_ids') or guest.get('create_allow_server_choice', True) else []
+    allow_choice = len(choice_servers) > 1 if guest.get('allowed_server_ids') else bool(guest.get('create_allow_server_choice', True))
+    if choice_servers and int(guest.get('create_server_id') or 0) not in {int(s['id']) for s in choice_servers}:
+        guest['create_server_id'] = int(choice_servers[0]['id'])
 
     try:
         from managers.user_expiration import maybe_start_user_expiration, user_is_expired
@@ -6277,6 +6326,7 @@ async def api_guest_create(token: str, req: GuestCreateRequest, request: Request
                     default_server_id=int(guest.get('create_server_id') or 0),
                     requested_server_id=req.server_id,
                     allow_choice=allow_choice,
+                    allowed_ids=guest.get('allowed_server_ids') or None,
                 )
             except ValueError as ve:
                 return JSONResponse({'error': str(ve)}, status_code=400)
@@ -6392,9 +6442,6 @@ async def api_issue_guest_link(request: Request, req: IssueGuestLinkRequest):
     reenable_uid = ''
     async with DATA_LOCK:
         data = load_data()
-        if protocol_base(protocol) != 'xui':
-            if server_id < 0 or server_id >= len(data.get('servers') or []):
-                return JSONResponse({'error': 'Server not found'}, status_code=400)
         settings = data.setdefault('settings', {})
         links = settings.setdefault('guest_links', [])
         existing = None
@@ -6403,6 +6450,27 @@ async def api_issue_guest_link(request: Request, req: IssueGuestLinkRequest):
                 (row for row in links if isinstance(row, dict) and (row.get('external_ref') or '') == external_ref),
                 None,
             )
+        if existing and req.reuse_only:
+            token = existing.get('token') or ''
+            user_id = existing.get('user_id') or ''
+            if not token:
+                return JSONResponse({'error': 'Guest link not found'}, status_code=404)
+            url = _guest_public_url(request, token)
+            return {
+                'status': 'success',
+                'url': url,
+                'token': token,
+                'user_id': user_id,
+                'server_id': int(existing.get('create_server_id') or 0),
+                'protocol': existing.get('create_protocol') or protocol,
+            }
+        allowed_ids = _evilfox_allowed_ids(data)
+        if allowed_ids and server_id not in allowed_ids:
+            server_id = allowed_ids[0]
+        if protocol_base(protocol) != 'xui':
+            if server_id < 0 or server_id >= len(data.get('servers') or []):
+                return JSONResponse({'error': 'Server not found'}, status_code=400)
+        choice_on = len(allowed_ids) > 1
         if existing:
             user_id = existing.get('user_id') or ''
             if not user_id or not any(u.get('id') == user_id for u in data.get('users', [])):
@@ -6411,7 +6479,8 @@ async def api_issue_guest_link(request: Request, req: IssueGuestLinkRequest):
             existing['name'] = name
             existing['create_protocol'] = protocol
             existing['create_server_id'] = server_id
-            existing['create_allow_server_choice'] = bool(req.allow_server_choice)
+            existing['allowed_server_ids'] = allowed_ids
+            existing['create_allow_server_choice'] = choice_on
             existing['allow_create'] = True
             existing['traffic_limit'] = limit_bytes
             if _guest_traffic_view(existing)['exhausted']:
@@ -6436,7 +6505,8 @@ async def api_issue_guest_link(request: Request, req: IssueGuestLinkRequest):
                 'allow_create': True,
                 'create_protocol': protocol,
                 'create_server_id': server_id,
-                'create_allow_server_choice': bool(req.allow_server_choice),
+                'allowed_server_ids': allowed_ids,
+                'create_allow_server_choice': choice_on,
                 'traffic_limit': limit_bytes,
                 'traffic_used': 0,
                 'disabled_by_traffic': False,
@@ -6447,7 +6517,14 @@ async def api_issue_guest_link(request: Request, req: IssueGuestLinkRequest):
     if reenable_uid:
         await _set_guest_quota_connections(reenable_uid, True, all_of_user=True)
     url = _guest_public_url(request, token)
-    return {'status': 'success', 'url': url, 'token': token, 'user_id': user_id}
+    return {
+        'status': 'success',
+        'url': url,
+        'token': token,
+        'user_id': user_id,
+        'server_id': server_id,
+        'protocol': protocol,
+    }
 
 
 def _create_guest_link_user(data: dict, name: str, external_ref: str) -> str:
@@ -6793,6 +6870,7 @@ def _resolve_chosen_server_id(
     default_server_id: int,
     requested_server_id: Optional[int],
     allow_choice: bool,
+    allowed_ids: Optional[list] = None,
 ) -> int:
     """Pick server_id for guest/invite create; validate against installed protocols."""
     servers = data.get('servers') or []
@@ -6801,6 +6879,15 @@ def _resolve_chosen_server_id(
         sid = default_sid
     else:
         sid = int(requested_server_id)
+    if allowed_ids:
+        allow_set = {int(x) for x in allowed_ids}
+        if sid not in allow_set:
+            if default_sid in allow_set:
+                sid = default_sid
+            elif allow_set:
+                sid = sorted(allow_set)[0]
+        if sid not in allow_set:
+            raise ValueError('Server is not available')
     if sid < 0 or sid >= len(servers):
         raise ValueError('Server not found')
     if protocol_base(protocol) != 'xui' and not _server_supports_protocol(servers[sid], protocol):
