@@ -2585,6 +2585,10 @@ class GuestCreateRequest(BaseModel):
     protocol: Optional[str] = None
 
 
+class DeleteGuestLinkRequest(BaseModel):
+    external_ref: str = ''
+
+
 class IssueGuestLinkRequest(BaseModel):
     name: str = ''
     protocol: str = 'awg'
@@ -6503,6 +6507,34 @@ async def api_guest_regenerate_token(request: Request):
     data.setdefault('settings', {})['guest'] = guest
     save_data(data)
     return {'status': 'success', 'token': guest['token']}
+
+
+@app.post('/api/guest-links/delete', tags=["Guest"])
+async def api_delete_guest_link(request: Request, req: DeleteGuestLinkRequest):
+    """Remove the evilfox guest link and its dedicated panel user."""
+    if not _check_admin(request):
+        return JSONResponse({'error': 'Forbidden'}, status_code=403)
+    external_ref = (req.external_ref or '').strip()
+    if not external_ref:
+        return JSONResponse({'error': 'external_ref is required'}, status_code=400)
+    async with DATA_LOCK:
+        data = load_data()
+        settings = data.setdefault('settings', {})
+        links = [row for row in (settings.get('guest_links') or []) if isinstance(row, dict)]
+        match = next((row for row in links if (row.get('external_ref') or '') == external_ref), None)
+        user_id = (match or {}).get('user_id') or ''
+        if not user_id:
+            owner = next(
+                (u for u in data.get('users') or [] if (u.get('description') or '') == external_ref),
+                None,
+            )
+            user_id = (owner or {}).get('id') or ''
+        settings['guest_links'] = [row for row in links if (row.get('external_ref') or '') != external_ref]
+        removed = False
+        if user_id:
+            removed = bool(await perform_delete_user(data, user_id))
+        save_data(data)
+    return {'status': 'success', 'removed': removed}
 
 
 @app.post('/api/guest-links', tags=["Guest"])
