@@ -616,6 +616,28 @@ def save_data(data: dict, *, replace_tokens: bool = False) -> None:
                     tokens = live_tokens
                 tokens = [t for t in tokens if str(t.get('user_id')) in user_ids]
 
+                # A restart that loaded an empty connection list must not erase
+                # configs that are still in Postgres. Intentional removal of one
+                # user's configs still applies, because those rows are filtered
+                # by the remaining user ids below.
+                if users and not connections:
+                    cur.execute('SELECT COUNT(*) AS n FROM user_connections')
+                    live_n = int(cur.fetchone()['n'] or 0)
+                    if live_n:
+                        logger.error(
+                            'Blocked a save that would delete all %s user configs; keeping database rows',
+                            live_n,
+                        )
+                        cur.execute(
+                            'SELECT id, user_id, server_id, protocol, client_id, name, '
+                            'xui_panel_id, created_at, last_bytes, invite_id, traffic_used, invite_limited '
+                            'FROM user_connections ORDER BY created_at NULLS LAST, id'
+                        )
+                        connections = [_row_to_connection(r) for r in cur.fetchall()]
+                        connections = [
+                            c for c in connections if str(c.get('user_id')) in user_ids
+                        ]
+
                 # Order matters for FKs: children first on delete, parents first on insert
                 cur.execute('DELETE FROM invite_links')
                 cur.execute('DELETE FROM api_tokens')
@@ -749,6 +771,105 @@ def save_data(data: dict, *, replace_tokens: bool = False) -> None:
         data['settings'] = settings
         with _DATA_CACHE_LOCK:
             _DATA_CACHE = copy.deepcopy(data)
+    _write_panel_snapshot(data)
+
+
+def _panel_snapshot_path() -> Path:
+    """JSON copy on the Docker data volume. Survives a Dokploy restart that
+    brings Postgres up empty."""
+    raw = os.environ.get('PANEL_DATA_DIR', '').strip()
+    if raw:
+        base = Path(raw)
+    elif os.environ.get('PANEL_IN_DOCKER') == '1':
+        base = Path('/app/data')
+    else:
+        base = Path(__file__).resolve().parents[1] / 'data'
+    return base / 'panel-snapshot.json'
+
+
+def _read_panel_snapshot() -> Optional[dict]:
+    path = _panel_snapshot_path()
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding='utf-8'))
+    except Exception as exc:
+        logger.warning('Could not read panel snapshot %s: %s', path, exc)
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _write_panel_snapshot(data: dict) -> None:
+    users = data.get('users') or []
+    servers = data.get('servers') or []
+    connections = data.get('user_connections') or []
+    # Never replace a good snapshot with a completely empty boot.
+    if not users and not servers and not connections:
+        return
+    path = _panel_snapshot_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            'servers': servers,
+            'users': users,
+            'user_connections': connections,
+            'invite_links': data.get('invite_links') or [],
+            'settings': data.get('settings') or {},
+        }
+        tmp = path.with_suffix('.json.tmp')
+        tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding='utf-8')
+        tmp.replace(path)
+    except Exception as exc:
+        logger.warning('Could not write panel snapshot %s: %s', path, exc)
+
+
+def _restore_snapshot_into_empty_db() -> bool:
+    snap = _read_panel_snapshot()
+    if not snap:
+        return False
+    users = [u for u in (snap.get('users') or []) if isinstance(u, dict)]
+    servers = [s for s in (snap.get('servers') or []) if isinstance(s, dict)]
+    connections = [c for c in (snap.get('user_connections') or []) if isinstance(c, dict)]
+    if not users and not servers and not connections:
+        return False
+    logger.warning(
+        'Database is empty after restart — restoring snapshot (%s users, %s configs)',
+        len(users),
+        len(connections),
+    )
+    save_data({
+        'servers': servers,
+        'users': users,
+        'user_connections': connections,
+        'invite_links': snap.get('invite_links') or [],
+        'settings': snap.get('settings') or {},
+        'api_tokens': [],
+    })
+    return True
+
+
+def _restore_missing_connections() -> bool:
+    """If users are still in Postgres but every config row is gone, put the
+    snapshot's configs back. A real delete rewrites the snapshot, so it is empty."""
+    snap = _read_panel_snapshot()
+    if not snap:
+        return False
+    snap_conns = [c for c in (snap.get('user_connections') or []) if isinstance(c, dict)]
+    if not snap_conns:
+        return False
+    live = load_data()
+    if live.get('user_connections'):
+        return False
+    if not live.get('users'):
+        return False
+    user_ids = {str(u.get('id')) for u in live['users'] if u.get('id')}
+    restored = [c for c in snap_conns if str(c.get('user_id')) in user_ids]
+    if not restored:
+        return False
+    logger.warning('User configs missing after restart — restoring %s from snapshot', len(restored))
+    live['user_connections'] = restored
+    save_data(live)
+    return True
 
 
 def export_data_dict() -> dict:
@@ -842,12 +963,36 @@ def clear_tunnel_state(provider: str) -> None:
 
 
 def ensure_db_ready(legacy_data_file: Optional[str] = None) -> None:
-    """Init schema and one-shot import from data.json when DB is empty."""
+    """Init schema and recover state after a Dokploy restart.
+
+    An empty database is filled from the on-disk snapshot first, then from a
+    legacy data.json. If users survived but their configs did not, configs are
+    restored from that same snapshot.
+    """
     init_schema()
-    if legacy_data_file and is_database_empty() and os.path.exists(legacy_data_file):
-        logger.info('Empty database — importing legacy %s', legacy_data_file)
+    if is_database_empty():
         try:
-            import_from_json_file(legacy_data_file)
+            if _restore_snapshot_into_empty_db():
+                return
         except Exception:
-            logger.exception('Legacy data.json import failed — panel will start with empty DB')
+            logger.exception('Panel snapshot restore failed')
             invalidate_data_cache()
+        if legacy_data_file and os.path.exists(legacy_data_file):
+            logger.info('Empty database — importing legacy %s', legacy_data_file)
+            try:
+                import_from_json_file(legacy_data_file)
+            except Exception:
+                logger.exception('Legacy data.json import failed — panel will start with empty DB')
+                invalidate_data_cache()
+        return
+    try:
+        _restore_missing_connections()
+    except Exception:
+        logger.exception('Could not restore missing user configs from snapshot')
+        invalidate_data_cache()
+    try:
+        current = load_data()
+        if current.get('users') or current.get('servers') or current.get('user_connections'):
+            _write_panel_snapshot(current)
+    except Exception:
+        logger.exception('Could not refresh panel snapshot on startup')
