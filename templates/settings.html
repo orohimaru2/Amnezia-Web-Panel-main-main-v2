@@ -172,24 +172,69 @@
         </div>
 
         <div class="card">
-            <h3 class="card-title" style="margin-bottom: var(--space-lg);">{{ _('evilfox_servers_label') }}</h3>
+            <h3 class="card-title" style="margin-bottom: var(--space-sm);">{{ _('evilfox_servers_label') }}</h3>
             <p class="form-hint" style="margin-bottom: var(--space-md);">{{ _('evilfox_servers_hint') }}</p>
-            <div id="evilfoxServerList" style="display:flex; flex-direction:column; gap:8px;">
-                {% for s in servers %}
-                <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
-                    <input type="checkbox" class="evilfox-server" value="{{ loop.index0 }}"
-                        {% if settings.guest.evilfox_server_ids is defined and loop.index0 in settings.guest.evilfox_server_ids %}checked{% endif %}>
-                    <span>{{ s.name or s.host }} <span class="form-hint" style="display:inline;">({{ s.host }})</span>
-                        {% if server_proto_labels[loop.index0] %}
-                        <span class="form-hint" style="display:block;">{{ server_proto_labels[loop.index0]|join(', ') }}</span>
-                        {% endif %}
-                    </span>
-                </label>
+            <div class="ef-server-list">
+                {% for row in evilfox_rows %}
+                <article class="ef-server">
+                    <div class="ef-server__head">
+                        <span class="ef-server__ico">{{ icon('server') }}</span>
+                        <div>
+                            <div class="ef-server__name">{{ row.name }}</div>
+                            {% if row.host %}<div class="ef-server__host">{{ row.host }}</div>{% endif %}
+                        </div>
+                    </div>
+                    {% if row.chips %}
+                    <div class="ef-proto-row">
+                        {% for chip in row.chips %}
+                        <label class="ef-proto">
+                            <input type="checkbox" class="evilfox-proto" data-server="{{ row.id }}" value="{{ chip.code }}" {% if chip.checked %}checked{% endif %}>
+                            <span class="ef-proto__ico">{{ icon(chip.icon) }}</span>
+                            <span>{{ chip.label }}</span>
+                        </label>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <p class="form-hint" style="margin:0;">{{ _('evilfox_no_offer_protocols') }}</p>
+                    {% endif %}
+                </article>
                 {% else %}
                 <div class="form-hint">{{ _('no_servers') }}</div>
                 {% endfor %}
             </div>
         </div>
+        <style>
+            .ef-server-list { display: flex; flex-direction: column; gap: 12px; }
+            .ef-server {
+                padding: 14px;
+                border: 1px solid var(--border);
+                border-radius: 14px;
+                background: var(--bg-primary);
+            }
+            .ef-server__head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+            .ef-server__ico {
+                width: 36px; height: 36px; border-radius: 10px;
+                display: inline-flex; align-items: center; justify-content: center;
+                background: var(--accent-glow); color: var(--accent); flex: 0 0 auto;
+            }
+            .ef-server__name { font-weight: 600; }
+            .ef-server__host { color: var(--text-muted); font-size: 0.85rem; }
+            .ef-proto-row { display: flex; flex-wrap: wrap; gap: 8px; }
+            .ef-proto {
+                position: relative;
+                display: inline-flex; align-items: center; gap: 8px;
+                padding: 8px 12px; border-radius: 999px;
+                border: 1px solid var(--border); background: var(--bg-secondary);
+                cursor: pointer; user-select: none;
+            }
+            .ef-proto input { position: absolute; opacity: 0; pointer-events: none; }
+            .ef-proto__ico { display: inline-flex; color: var(--text-muted); }
+            .ef-proto:has(input:checked) {
+                border-color: var(--accent);
+                background: var(--accent-glow);
+            }
+            .ef-proto:has(input:checked) .ef-proto__ico { color: var(--accent); }
+        </style>
 
         <!-- BLOCK Telegram Bot -->
         <div class="card">
@@ -1563,7 +1608,14 @@
             create_xui_panel_id: document.getElementById('guest_create_xui_panel')?.value || '',
             create_allow_server_choice: !!(document.getElementById('guest_allow_server_choice') && document.getElementById('guest_allow_server_choice').checked),
             traffic_limit: parseFloat(document.getElementById('guest_traffic_limit').value || '0') || 0,
-            evilfox_server_ids: Array.from(document.querySelectorAll('.evilfox-server:checked')).map(el => parseInt(el.value, 10)).filter(n => !Number.isNaN(n)),
+            evilfox_server_ids: Array.from(new Set(Array.from(document.querySelectorAll('.evilfox-proto:checked')).map(el => parseInt(el.dataset.server, 10)).filter(n => !Number.isNaN(n)))),
+            evilfox_server_protocols: Array.from(document.querySelectorAll('.evilfox-proto:checked')).reduce((acc, el) => {
+                const sid = String(el.dataset.server || '');
+                if (!sid) return acc;
+                if (!acc[sid]) acc[sid] = [];
+                acc[sid].push(el.value);
+                return acc;
+            }, {}),
         };
 
         const donateMethod = (key) => ({

@@ -2508,6 +2508,7 @@ class GuestSettings(BaseModel):
     create_allow_server_choice: bool = True
     traffic_limit: Optional[float] = 0
     evilfox_server_ids: List[int] = []
+    evilfox_server_protocols: Dict[str, List[str]] = {}
 
 
 class DonateMethodSettings(BaseModel):
@@ -6039,6 +6040,92 @@ def _set_guest_user_expiration(data: dict, user_id: str, expires_iso: Optional[s
             return
 
 
+_EVILFOX_PROTO_CHOICES = (
+    ('awg3', 'AWG 3.1', 'shield'),
+    ('awg2', 'AWG 2.0', 'sparkles'),
+    ('wireguard', 'WireGuard', 'network'),
+    ('naiveproxy', 'NaiveProxy', 'lock'),
+)
+
+
+def _evilfox_protocol_map(data: dict) -> dict:
+    raw = ((data.get('settings') or {}).get('guest') or {}).get('evilfox_server_protocols') or {}
+    out = {}
+    if not isinstance(raw, dict):
+        return out
+    for key, value in raw.items():
+        try:
+            sid = int(key)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(value, list):
+            continue
+        out[sid] = [protocol_base(str(item)) for item in value if str(item).strip()]
+    return out
+
+
+def _evilfox_canonical_protocol(installed: list, code: str) -> Optional[str]:
+    have = set(installed)
+    if code == 'awg2':
+        if 'awg2' in have:
+            return 'awg2'
+        if 'awg' in have:
+            return 'awg'
+        return None
+    return code if code in have else None
+
+
+def _evilfox_offered_protocols(installed: list, chosen: Optional[list]) -> list:
+    """Protocols a user may pick on this server. None means every needed installed protocol."""
+    out = []
+    for code, _label, _icon in _EVILFOX_PROTO_CHOICES:
+        canonical = _evilfox_canonical_protocol(installed, code)
+        if not canonical:
+            continue
+        if chosen is not None:
+            wanted = False
+            for item in chosen:
+                base = protocol_base(str(item))
+                if base == code or base in _protocol_family(code):
+                    wanted = True
+                    break
+            if not wanted:
+                continue
+        if canonical not in out:
+            out.append(canonical)
+    return out
+
+
+def _evilfox_server_rows(data: dict) -> list:
+    marked = set(_evilfox_allowed_ids(data))
+    saved = _evilfox_protocol_map(data)
+    rows = []
+    for idx, server in enumerate(data.get('servers') or []):
+        if not isinstance(server, dict):
+            continue
+        installed = _server_client_protocols(server)
+        chosen = saved.get(idx)
+        chips = []
+        for code, label, icon_name in _EVILFOX_PROTO_CHOICES:
+            if not _evilfox_canonical_protocol(installed, code):
+                continue
+            if chosen is not None:
+                checked = any(
+                    protocol_base(item) == code or protocol_base(item) in _protocol_family(code)
+                    for item in chosen
+                )
+            else:
+                checked = idx in marked
+            chips.append({'code': code, 'label': label, 'icon': icon_name, 'checked': checked})
+        rows.append({
+            'id': idx,
+            'name': server.get('name') or server.get('host') or f'Server {idx + 1}',
+            'host': server.get('host') or '',
+            'chips': chips,
+        })
+    return rows
+
+
 def _evilfox_allowed_ids(data: dict) -> List[int]:
     """Servers the admin marked for evilfox.win guest links."""
     raw = ((data.get('settings') or {}).get('guest') or {}).get('evilfox_server_ids') or []
@@ -6100,13 +6187,22 @@ def _guest_catalog(data: dict, guest: dict) -> tuple:
             continue
         if sid not in marked:
             marked.append(sid)
-    indexes = marked if marked else list(range(len(all_servers)))
+    saved_map = _evilfox_protocol_map(data)
+    if not marked and saved_map:
+        marked = list(saved_map.keys())
+    indexes = marked
     rows = []
     proto_ids = []
     for idx in indexes:
         if idx < 0 or idx >= len(all_servers) or not isinstance(all_servers[idx], dict):
             continue
-        protos = _server_client_protocols(all_servers[idx])
+        installed = _server_client_protocols(all_servers[idx])
+        if saved_map:
+            if idx not in saved_map:
+                continue
+            protos = _evilfox_offered_protocols(installed, saved_map.get(idx))
+        else:
+            protos = _evilfox_offered_protocols(installed, None)
         if not protos:
             continue
         server = all_servers[idx]
@@ -7802,16 +7898,12 @@ async def settings_page(request: Request):
     if before != after:
         save_data(data)
     xui_servers = [public_server_view(s) for s in list_xui_servers(settings)]
-    server_proto_labels = [
-        [protocol_display_name(p) for p in _server_client_protocols(s if isinstance(s, dict) else {})]
-        for s in (data.get('servers') or [])
-    ]
     return tpl(
         request,
         'settings.html',
         settings=data.get('settings', {}),
         servers=data.get('servers', []),
-        server_proto_labels=server_proto_labels,
+        evilfox_rows=_evilfox_server_rows(data),
         users=data.get('users', []),
         xui_servers=xui_servers,
         current_version=CURRENT_VERSION,
