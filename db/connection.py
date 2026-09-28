@@ -122,6 +122,9 @@ def init_schema():
                 "ALTER TABLE invite_links ADD COLUMN IF NOT EXISTS traffic_limit BIGINT NOT NULL DEFAULT 0"
             )
             cur.execute(
+                "ALTER TABLE invite_links ADD COLUMN IF NOT EXISTS traffic_reset_at TIMESTAMPTZ"
+            )
+            cur.execute(
                 "ALTER TABLE user_connections ADD COLUMN IF NOT EXISTS invite_id UUID"
             )
             cur.execute(

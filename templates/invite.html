@@ -50,8 +50,8 @@
             <div class="invite-stat-ico">{{ icon('globe') }}</div>
             <div>
                 <div class="invite-stat-label">{{ _('invite_traffic_short') }}</div>
-                <div class="invite-stat-value">
-                    {% if invite.traffic_limit_text %}{{ invite.traffic_limit_text }} {{ _('gb') }}{% else %}∞{% endif %}
+                <div class="invite-stat-value" id="trafficValue">
+                    {{ invite.traffic_used_text }} / {% if invite.traffic_limit_text %}{{ invite.traffic_limit_text }}{% else %}∞{% endif %} {{ _('gb') }}
                 </div>
             </div>
         </div>

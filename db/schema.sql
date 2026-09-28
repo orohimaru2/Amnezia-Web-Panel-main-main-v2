@@ -94,6 +94,7 @@ CREATE TABLE IF NOT EXISTS invite_links (
     expires_at TIMESTAMPTZ,
     duration_days INTEGER NOT NULL DEFAULT 0,
     traffic_limit BIGINT NOT NULL DEFAULT 0,
+    traffic_reset_at TIMESTAMPTZ,
     note TEXT,
     created_at TIMESTAMPTZ
 );

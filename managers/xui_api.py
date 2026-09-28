@@ -158,6 +158,51 @@ class XuiApi:
             })
         return result
 
+    async def client_traffic_bytes(self) -> dict:
+        """Map client email to upload+download bytes from 3x-ui inbound stats."""
+        out = {}
+        for inbound in await self.list_inbounds():
+            if not isinstance(inbound, dict):
+                continue
+            stats = inbound.get('clientStats') or []
+            if isinstance(stats, str):
+                try:
+                    stats = json.loads(stats)
+                except Exception:
+                    stats = []
+            if not isinstance(stats, list):
+                continue
+            for row in stats:
+                if not isinstance(row, dict):
+                    continue
+                email = str(row.get('email') or '').strip()
+                if not email:
+                    continue
+                try:
+                    total = int(row.get('up') or 0) + int(row.get('down') or 0)
+                except (TypeError, ValueError):
+                    continue
+                out[email] = total
+        return out
+
+    async def reset_client_traffic(self, email: str, inbound_id: int = 0) -> None:
+        email = (email or '').strip()
+        if not email:
+            raise XuiApiError('Client email is required')
+        email_q = quote(email, safe='')
+        paths = []
+        if int(inbound_id or 0) > 0:
+            paths.append(f'/panel/api/inbounds/{int(inbound_id)}/resetClientTraffic/{email_q}')
+        paths.append(f'/panel/api/inbounds/resetClientTraffic/{email_q}')
+        last = None
+        for path in paths:
+            try:
+                await self._request('POST', path)
+                return
+            except XuiApiError as exc:
+                last = exc
+        raise last or XuiApiError(f'Failed to reset traffic for {email}')
+
     async def get_inbound(self, inbound_id: int) -> dict:
         inbound_id = int(inbound_id)
         for inbound in await self.list_inbounds():
@@ -551,6 +596,18 @@ async def xui_delete_client(settings: dict, email: str, panel_id: Optional[str] 
     scoped = _resolve_settings(settings, panel_id)
     async with XuiApi.from_panel_settings(scoped) as api:
         await api.delete_client(email)
+
+
+async def xui_client_traffic_bytes(settings: dict, panel_id: Optional[str] = None) -> dict:
+    scoped = _resolve_settings(settings, panel_id)
+    async with XuiApi.from_panel_settings(scoped) as api:
+        return await api.client_traffic_bytes()
+
+
+async def xui_reset_client_traffic(settings: dict, email: str, panel_id: Optional[str] = None, inbound_id: int = 0) -> None:
+    scoped = _resolve_settings(settings, panel_id)
+    async with XuiApi.from_panel_settings(scoped) as api:
+        await api.reset_client_traffic(email, inbound_id)
 
 
 async def xui_toggle_client(settings: dict, email: str, enable: bool, panel_id: Optional[str] = None) -> None:

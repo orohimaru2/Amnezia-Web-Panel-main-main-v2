@@ -98,7 +98,7 @@
                     <div>
                         <div class="invite-stat-label">{{ _('invite_traffic_short') }}</div>
                         <div class="invite-stat-value">
-                            {% if inv.traffic_limit_text %}{{ inv.traffic_limit_text }} {{ _('gb') }}{% else %}∞{% endif %}
+                            {{ inv.traffic_used_text }} / {% if inv.traffic_limit_text %}{{ inv.traffic_limit_text }}{% else %}∞{% endif %} {{ _('gb') }}
                         </div>
                     </div>
                 </div>

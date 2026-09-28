@@ -3000,6 +3000,8 @@ body,
     font-weight: 700;
     font-size: 1.05rem;
     margin-top: 1px;
+    line-height: 1.2;
+    font-variant-numeric: tabular-nums;
 }
 
 .invite-hero-mark {

@@ -369,6 +369,7 @@ def _row_to_invite(row) -> dict:
         'expires_at': _ts_iso(row['expires_at']),
         'duration_days': int(row.get('duration_days') or 0),
         'traffic_limit': int(row.get('traffic_limit') or 0),
+        'traffic_reset_at': _ts_iso(row.get('traffic_reset_at')),
         'note': row['note'] or '',
         'created_at': _ts_iso(row['created_at']),
     }
@@ -420,7 +421,7 @@ def _fetch_data_from_db() -> dict:
             cur.execute(
                 'SELECT id, name, token, enabled, max_uses, used_count, user_id, '
                 'protocol, server_id, xui_inbound_id, xui_panel_id, password_hash, expires_at, '
-                'duration_days, traffic_limit, note, created_at FROM invite_links '
+                'duration_days, traffic_limit, traffic_reset_at, note, created_at FROM invite_links '
                 'ORDER BY created_at DESC NULLS LAST, name'
             )
             invite_links = [_row_to_invite(r) for r in cur.fetchall()]
@@ -708,8 +709,8 @@ def save_data(data: dict, *, replace_tokens: bool = False) -> None:
                         'INSERT INTO invite_links ('
                         'id, name, token, enabled, max_uses, used_count, user_id, '
                         'protocol, server_id, xui_inbound_id, xui_panel_id, password_hash, expires_at, '
-                        'duration_days, traffic_limit, note, created_at'
-                        ') VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',
+                        'duration_days, traffic_limit, traffic_reset_at, note, created_at'
+                        ') VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',
                         (
                             _as_uuid(link['id']),
                             link.get('name') or '',
@@ -726,6 +727,7 @@ def save_data(data: dict, *, replace_tokens: bool = False) -> None:
                             _parse_ts(link.get('expires_at')),
                             int(link.get('duration_days') or 0),
                             int(link.get('traffic_limit') or 0),
+                            _parse_ts(link.get('traffic_reset_at')),
                             link.get('note') or '',
                             _parse_ts(link.get('created_at')),
                         ),

@@ -2851,6 +2851,75 @@ def _scrape_server_traffic(server, sid, my_conns):
     return server_updates
 
 
+def _invite_month_reset_due(link: dict, now: datetime) -> bool:
+    raw = str(link.get('traffic_reset_at') or '').strip()
+    if not raw:
+        return False
+    try:
+        last = datetime.fromisoformat(raw)
+    except ValueError:
+        return True
+    if last.tzinfo is not None:
+        last = last.astimezone().replace(tzinfo=None)
+    return (last.year, last.month) != (now.year, now.month)
+
+
+def _apply_invite_monthly_reset(data: dict, now: datetime) -> tuple:
+    """Zero invite usage when a new month starts. Returns (changed, reenable, xui_reset)."""
+    changed = False
+    reenable = []
+    xui_reset = []
+    stamp = now.isoformat(timespec='seconds')
+    for link in data.get('invite_links') or []:
+        if not isinstance(link, dict):
+            continue
+        if not str(link.get('traffic_reset_at') or '').strip():
+            link['traffic_reset_at'] = stamp
+            changed = True
+            continue
+        if not _invite_month_reset_due(link, now):
+            continue
+        invite_id = str(link.get('id') or '')
+        for conn in data.get('user_connections') or []:
+            if str(conn.get('invite_id') or '') != invite_id:
+                continue
+            conn['traffic_used'] = 0
+            if protocol_base(conn.get('protocol') or '') == 'xui':
+                xui_reset.append(dict(conn))
+            if conn.get('invite_limited'):
+                reenable.append(dict(conn))
+        link['traffic_reset_at'] = stamp
+        changed = True
+        logger.info('Invite traffic reset on the 1st for %s', link.get('name') or invite_id)
+    return changed, reenable, xui_reset
+
+
+async def _xui_invite_traffic_updates(data: dict) -> list:
+    """Usage deltas for invite configs that live on 3x-ui."""
+    from managers.xui_api import xui_client_traffic_bytes
+    grouped = {}
+    for conn in data.get('user_connections') or []:
+        if protocol_base(conn.get('protocol') or '') != 'xui' or not conn.get('invite_id'):
+            continue
+        grouped.setdefault(conn.get('xui_panel_id') or '', []).append(conn)
+    updates = []
+    for panel_id, conns in grouped.items():
+        try:
+            usage = await xui_client_traffic_bytes(data.get('settings') or {}, panel_id or None)
+        except Exception:
+            logger.exception('3x-ui traffic read failed for panel %s', panel_id or 'default')
+            continue
+        for conn in conns:
+            email = str(conn.get('client_id') or '')
+            if email not in usage:
+                continue
+            curr = int(usage[email] or 0)
+            last = int(conn.get('last_bytes') or 0)
+            delta = curr - last if curr >= last else curr
+            updates.append((conn['id'], delta, curr))
+    return updates
+
+
 async def _set_invite_connection_enabled(conn: dict, enabled: bool) -> None:
     """Turn one invite-issued config on or off when its traffic limit changes."""
     data = load_data()
@@ -2895,6 +2964,29 @@ async def periodic_background_tasks():
             
             # --- 1. TRAFFIC SYNC & LIMITS ---
             logger.info("Starting background traffic sync...")
+            reenable_conns = []
+            xui_reset_conns = []
+            async with DATA_LOCK:
+                reset_data = load_data()
+                changed, reenable_conns, xui_reset_conns = _apply_invite_monthly_reset(reset_data, datetime.now())
+                if changed:
+                    save_data(reset_data)
+            for conn in xui_reset_conns:
+                try:
+                    from managers.xui_api import xui_reset_client_traffic
+                    fresh = load_data()
+                    await xui_reset_client_traffic(
+                        fresh.get('settings') or {},
+                        conn.get('client_id') or '',
+                        conn.get('xui_panel_id') or None,
+                    )
+                except Exception:
+                    logger.exception('3x-ui traffic reset failed for %s', conn.get('client_id'))
+            for conn in reenable_conns:
+                try:
+                    await _set_invite_connection_enabled(conn, True)
+                except Exception:
+                    logger.exception('Invite traffic re-enable failed for %s', conn.get('id'))
             data = load_data()
             
             conns_by_server = {}
@@ -2923,6 +3015,11 @@ async def periodic_background_tasks():
                     updates.extend(server_updates)
                 # Brief yield so API requests can use SSH between servers
                 await asyncio.sleep(0.2)
+
+            try:
+                updates.extend(await _xui_invite_traffic_updates(data))
+            except Exception:
+                logger.exception('Invite 3x-ui traffic sync failed')
 
             to_disable_uids = []
             guest_quota_uids = []
@@ -7225,6 +7322,12 @@ def _invite_public_view(link: dict, data: Optional[dict] = None) -> dict:
     exhausted = remaining is not None and remaining <= 0
     duration_days = int(link.get('duration_days') or 0)
     traffic_limit = int(link.get('traffic_limit') or 0)
+    traffic_used = 0
+    link_id = str(link.get('id') or '')
+    if data is not None and link_id:
+        for conn in data.get('user_connections') or []:
+            if str(conn.get('invite_id') or '') == link_id:
+                traffic_used += int(conn.get('traffic_used') or 0)
     protocol = link.get('protocol') or 'awg'
     servers = _invite_choices(link, data) if data is not None else []
     allow_server_choice = len(servers) > 1
@@ -7251,6 +7354,8 @@ def _invite_public_view(link: dict, data: Optional[dict] = None) -> dict:
         'traffic_limit': traffic_limit,
         'traffic_limit_gb': round(traffic_limit / (1024 ** 3), 2) if traffic_limit else 0,
         'traffic_limit_text': _format_gb(traffic_limit),
+        'traffic_used': traffic_used,
+        'traffic_used_text': _format_gb(traffic_used) or '0',
         'user_id': link.get('user_id') or '',
         'note': link.get('note') or '',
         'created_at': link.get('created_at'),
@@ -7540,6 +7645,7 @@ async def api_create_invite(request: Request, req: InviteCreateRequest):
         'expires_at': None,
         'duration_days': int(req.duration_days or 0),
         'traffic_limit': _gb_to_bytes(req.traffic_limit_gb),
+        'traffic_reset_at': datetime.now().isoformat(timespec='seconds'),
         'note': req.note or '',
         'allow_server_choice': len(options) > 1,
         'created_at': datetime.now().isoformat(),
@@ -7700,6 +7806,7 @@ async def api_invite_info(token: str, request: Request):
         'duration_days': view['duration_days'],
         'traffic_limit_gb': view['traffic_limit_gb'],
         'traffic_limit_text': view['traffic_limit_text'],
+        'traffic_used_text': view['traffic_used_text'],
     }
 
 
