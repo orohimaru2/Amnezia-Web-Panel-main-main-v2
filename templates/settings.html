@@ -57,6 +57,9 @@
                         {{ _('guest_enable') }}
                     </label>
                     <div class="form-hint">{{ _('guest_enable_hint') }}</div>
+                    {% if settings.guest.disabled_by_traffic %}
+                    <div class="form-hint" style="color:#ef4444;">{{ _('guest_traffic_disabled_link') }}</div>
+                    {% endif %}
                 </div>
 
                 <div id="guestFields" style="{% if not settings.guest.enabled %}display:none;{% endif %}">

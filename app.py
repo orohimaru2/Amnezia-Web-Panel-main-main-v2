@@ -2944,7 +2944,7 @@ async def periodic_background_tasks():
                 await perform_mass_operations(toggle_uids=[(uid, False) for uid in to_disable_uids])
             if guest_quota_uid:
                 logger.info("Guest link traffic limit reached for user %s", guest_quota_uid)
-                await _set_guest_quota_connections(guest_quota_uid, False)
+                await _block_guest_for_traffic(guest_quota_uid)
 
             # --- 2. REMNAWAVE SYNC ---
             logger.info("Starting background Remnawave sync...")
@@ -5976,6 +5976,19 @@ def _guest_traffic_view(guest: dict) -> dict:
     }
 
 
+async def _block_guest_for_traffic(user_id: str) -> None:
+    """Disable the guest link and its VPN configs after the traffic quota is spent."""
+    async with DATA_LOCK:
+        data = load_data()
+        guest = data.setdefault('settings', {}).setdefault('guest', {})
+        if (guest.get('user_id') or '') != user_id:
+            return
+        guest['enabled'] = False
+        guest['disabled_by_traffic'] = True
+        save_data(data)
+    await _set_guest_quota_connections(user_id, False)
+
+
 async def _set_guest_quota_connections(user_id: str, enabled: bool) -> None:
     """Turn guest-user VPN peers off when the link quota is spent, or back on when it is raised."""
     data = load_data()
@@ -6027,7 +6040,12 @@ def _resolve_guest(token: str, request: Request):
     """Return (data, guest_cfg, holder_user, error_response)."""
     data = load_data()
     guest = _guest_settings(data)
-    if not guest.get('enabled') or not guest.get('token') or guest.get('token') != token:
+    if not guest.get('token') or guest.get('token') != token:
+        return data, guest, None, JSONResponse({'error': 'Forbidden'}, status_code=403)
+    if not guest.get('enabled'):
+        lang = request.cookies.get('lang', 'ru')
+        if guest.get('disabled_by_traffic') or _guest_traffic_view(guest)['exhausted']:
+            return data, guest, None, JSONResponse({'error': _t('guest_traffic_exhausted', lang)}, status_code=403)
         return data, guest, None, JSONResponse({'error': 'Forbidden'}, status_code=403)
     if guest.get('password_hash') and not request.session.get(f'guest_auth_{token}'):
         return data, guest, None, JSONResponse({'error': 'Unauthorized'}, status_code=401)
@@ -6056,19 +6074,28 @@ async def guest_page(token: str, request: Request):
     data = load_data()
     guest = _guest_settings(data)
     lang = request.cookies.get('lang', 'ru')
-    if not guest.get('enabled') or guest.get('token') != token:
+    if guest.get('token') != token:
         return HTMLResponse(
             f"<h1>{_t('guest_not_found', lang)}</h1><p>{_t('guest_not_found_desc', lang)}</p>",
             status_code=404,
         )
-    need_password = bool(guest.get('password_hash')) and not request.session.get(f'guest_auth_{token}')
+    traffic_blocked = (not guest.get('enabled')) and (
+        bool(guest.get('disabled_by_traffic')) or _guest_traffic_view(guest)['exhausted']
+    )
+    if not guest.get('enabled') and not traffic_blocked:
+        return HTMLResponse(
+            f"<h1>{_t('guest_not_found', lang)}</h1><p>{_t('guest_not_found_desc', lang)}</p>",
+            status_code=404,
+        )
+    need_password = (not traffic_blocked) and bool(guest.get('password_hash')) and not request.session.get(f'guest_auth_{token}')
     return tpl(
         request,
         'guest.html',
         need_password=need_password,
         token=token,
-        allow_create=bool(guest.get('allow_create')),
+        allow_create=bool(guest.get('allow_create')) and not traffic_blocked,
         create_protocol=guest.get('create_protocol') or 'xui',
+        traffic_blocked=traffic_blocked,
     )
 
 
@@ -6076,7 +6103,12 @@ async def guest_page(token: str, request: Request):
 async def api_guest_auth(token: str, req: ShareAuthRequest, request: Request):
     data = load_data()
     guest = _guest_settings(data)
-    if not guest.get('enabled') or guest.get('token') != token:
+    if guest.get('token') != token:
+        return JSONResponse({'error': 'Link expired or disabled'}, status_code=404)
+    if not guest.get('enabled'):
+        lang = request.cookies.get('lang', 'ru')
+        if guest.get('disabled_by_traffic') or _guest_traffic_view(guest)['exhausted']:
+            return JSONResponse({'error': _t('guest_traffic_exhausted', lang)}, status_code=403)
         return JSONResponse({'error': 'Link expired or disabled'}, status_code=404)
     if not guest.get('password_hash'):
         request.session[f'guest_auth_{token}'] = True
@@ -7653,9 +7685,14 @@ async def save_settings(request: Request, payload: SaveSettingsRequest):
         limit_gb = 0
     guest['traffic_limit'] = int(limit_gb * (1024 ** 3))
     guest['traffic_used'] = int(existing_guest.get('traffic_used') or 0)
-    data['settings']['guest'] = guest
     guest_uid = guest.get('user_id') or ''
     guest_traffic = _guest_traffic_view(guest)
+    if guest_traffic['exhausted']:
+        guest['enabled'] = False
+        guest['disabled_by_traffic'] = True
+    else:
+        guest['disabled_by_traffic'] = False
+    data['settings']['guest'] = guest
     data['settings']['donate'] = payload.donate.dict()
 
     save_data(data)

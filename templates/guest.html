@@ -8,14 +8,17 @@
     <header class="share-hero">
         <h1 class="share-title">{{ _('guest_title') }}</h1>
         <p class="share-user">{{ _('guest_subtitle') }}</p>
-        {% if not need_password %}
+        {% if traffic_blocked %}
+        <p class="invite-status-banner is-danger">{{ icon('alert') }} {{ _('guest_traffic_exhausted') }}</p>
+        {% elif not need_password %}
         <p class="share-hint">{{ _('share_copy_hint') }}</p>
         <p id="guestTrafficNote" class="invite-status-note hidden"></p>
         <p id="guestTrafficBanner" class="invite-status-banner is-danger hidden"></p>
         {% endif %}
     </header>
 
-    {% if need_password %}
+    {% if traffic_blocked %}
+    {% elif need_password %}
     <div class="share-auth card">
         <div class="share-auth-icon">{{ icon('lock') }}</div>
         <p>{{ _('guest_protected_desc') }}</p>
