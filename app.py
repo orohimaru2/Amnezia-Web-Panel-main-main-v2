@@ -2583,6 +2583,15 @@ class GuestCreateRequest(BaseModel):
     server_id: Optional[int] = None
 
 
+class IssueGuestLinkRequest(BaseModel):
+    name: str = ''
+    protocol: str = 'awg'
+    server_id: int = 0
+    traffic_limit_gb: float = 0
+    allow_server_choice: bool = False
+    external_ref: str = ''
+
+
 class InviteServerOption(BaseModel):
     kind: str = 'ssh'  # ssh | xui
     server_id: int = 0
@@ -2869,7 +2878,7 @@ async def periodic_background_tasks():
                 await asyncio.sleep(0.2)
 
             to_disable_uids = []
-            guest_quota_uid = ''
+            guest_quota_uids = []
             if updates:
                 async with DATA_LOCK:
                     curr_data = load_data()
@@ -2917,12 +2926,8 @@ async def periodic_background_tasks():
                                     if uid not in to_disable_uids:
                                         to_disable_uids.append(uid)
 
-                                guest_cfg = curr_data.setdefault('settings', {}).setdefault('guest', {})
-                                if guest_cfg.get('user_id') and guest_cfg.get('user_id') == uid:
-                                    guest_cfg['traffic_used'] = max(0, int(guest_cfg.get('traffic_used') or 0) + int(delta))
-                                    guest_limit = int(guest_cfg.get('traffic_limit') or 0)
-                                    if guest_limit > 0 and guest_cfg['traffic_used'] >= guest_limit:
-                                        guest_quota_uid = uid
+                                if _bump_guest_traffic(curr_data, uid, delta) and uid not in guest_quota_uids:
+                                    guest_quota_uids.append(uid)
                                 
                                 # Check expiration date (naive/aware-safe)
                                 if u.get('enabled', True):
@@ -2942,7 +2947,7 @@ async def periodic_background_tasks():
             if to_disable_uids:
                 logger.info(f"Traffic limit reached, disabling users: {to_disable_uids}")
                 await perform_mass_operations(toggle_uids=[(uid, False) for uid in to_disable_uids])
-            if guest_quota_uid:
+            for guest_quota_uid in guest_quota_uids:
                 logger.info("Guest link traffic limit reached for user %s", guest_quota_uid)
                 await _block_guest_for_traffic(guest_quota_uid)
 
@@ -5976,23 +5981,87 @@ def _guest_traffic_view(guest: dict) -> dict:
     }
 
 
+def _bump_guest_traffic(data: dict, user_id: str, delta: int) -> bool:
+    """Add usage to every guest link tied to this user. Returns True if a quota is now spent."""
+    exhausted = False
+    settings = data.setdefault('settings', {})
+    guest_cfg = settings.setdefault('guest', {})
+    if (guest_cfg.get('user_id') or '') == user_id:
+        guest_cfg['traffic_used'] = max(0, int(guest_cfg.get('traffic_used') or 0) + int(delta))
+        if _guest_traffic_view(guest_cfg)['exhausted']:
+            exhausted = True
+    for link in settings.setdefault('guest_links', []):
+        if not isinstance(link, dict) or (link.get('user_id') or '') != user_id:
+            continue
+        link['traffic_used'] = max(0, int(link.get('traffic_used') or 0) + int(delta))
+        if _guest_traffic_view(link)['exhausted']:
+            exhausted = True
+    return exhausted
+
+
+def _issued_guest_settings(link: dict) -> dict:
+    return {
+        'enabled': bool(link.get('enabled', True)),
+        'token': link.get('token') or '',
+        'password_hash': None,
+        'user_id': link.get('user_id') or '',
+        'allow_create': bool(link.get('allow_create', True)),
+        'create_protocol': link.get('create_protocol') or 'awg',
+        'create_server_id': int(link.get('create_server_id') or 0),
+        'create_inbound_id': int(link.get('create_inbound_id') or 0),
+        'create_xui_panel_id': link.get('create_xui_panel_id') or '',
+        'create_allow_server_choice': bool(link.get('create_allow_server_choice', False)),
+        'traffic_limit': int(link.get('traffic_limit') or 0),
+        'traffic_used': int(link.get('traffic_used') or 0),
+        'disabled_by_traffic': bool(link.get('disabled_by_traffic')),
+        'issued': True,
+    }
+
+
+def _guest_by_token(data: dict, token: str) -> Optional[dict]:
+    guest = _guest_settings(data)
+    if guest.get('token') and guest.get('token') == token:
+        return guest
+    for link in ((data.get('settings') or {}).get('guest_links') or []):
+        if isinstance(link, dict) and link.get('token') == token:
+            return _issued_guest_settings(link)
+    return None
+
+
+def _guest_public_url(request: Request, token: str) -> str:
+    return get_panel_public_url(request).rstrip('/') + '/guest/' + token
+
+
 async def _block_guest_for_traffic(user_id: str) -> None:
     """Disable the guest link and its VPN configs after the traffic quota is spent."""
+    issued = False
     async with DATA_LOCK:
         data = load_data()
-        guest = data.setdefault('settings', {}).setdefault('guest', {})
-        if (guest.get('user_id') or '') != user_id:
+        settings = data.setdefault('settings', {})
+        guest = settings.setdefault('guest', {})
+        matched = False
+        if (guest.get('user_id') or '') == user_id:
+            guest['enabled'] = False
+            guest['disabled_by_traffic'] = True
+            matched = True
+        for link in settings.setdefault('guest_links', []):
+            if isinstance(link, dict) and (link.get('user_id') or '') == user_id:
+                link['enabled'] = False
+                link['disabled_by_traffic'] = True
+                matched = True
+                issued = True
+        if not matched:
             return
-        guest['enabled'] = False
-        guest['disabled_by_traffic'] = True
         save_data(data)
-    await _set_guest_quota_connections(user_id, False)
+    await _set_guest_quota_connections(user_id, False, all_of_user=issued)
 
 
-async def _set_guest_quota_connections(user_id: str, enabled: bool) -> None:
+async def _set_guest_quota_connections(user_id: str, enabled: bool, all_of_user: bool = False) -> None:
     """Turn guest-user VPN peers off when the link quota is spent, or back on when it is raised."""
     data = load_data()
-    if enabled:
+    if all_of_user:
+        targets = [c for c in data.get('user_connections', []) if c.get('user_id') == user_id]
+    elif enabled:
         targets = [c for c in data.get('user_connections', []) if c.get('user_id') == user_id and c.get('guest_limited')]
     else:
         targets = [c for c in data.get('user_connections', []) if c.get('user_id') == user_id and not c.get('guest_limited')]
@@ -6039,9 +6108,9 @@ async def _set_guest_quota_connections(user_id: str, enabled: bool) -> None:
 def _resolve_guest(token: str, request: Request):
     """Return (data, guest_cfg, holder_user, error_response)."""
     data = load_data()
-    guest = _guest_settings(data)
-    if not guest.get('token') or guest.get('token') != token:
-        return data, guest, None, JSONResponse({'error': 'Forbidden'}, status_code=403)
+    guest = _guest_by_token(data, token)
+    if not guest:
+        return data, _guest_settings(data), None, JSONResponse({'error': 'Forbidden'}, status_code=403)
     if not guest.get('enabled'):
         lang = request.cookies.get('lang', 'ru')
         if guest.get('disabled_by_traffic') or _guest_traffic_view(guest)['exhausted']:
@@ -6072,7 +6141,7 @@ def _enrich_guest_conn(c: dict, data: dict) -> dict:
 @app.get('/guest/{token}', response_class=HTMLResponse, tags=["System Templates"])
 async def guest_page(token: str, request: Request):
     data = load_data()
-    guest = _guest_settings(data)
+    guest = _guest_by_token(data, token) or _guest_settings(data)
     lang = request.cookies.get('lang', 'ru')
     if guest.get('token') != token:
         return HTMLResponse(
@@ -6102,7 +6171,7 @@ async def guest_page(token: str, request: Request):
 @app.post('/api/guest/{token}/auth', tags=["Guest"])
 async def api_guest_auth(token: str, req: ShareAuthRequest, request: Request):
     data = load_data()
-    guest = _guest_settings(data)
+    guest = _guest_by_token(data, token) or _guest_settings(data)
     if guest.get('token') != token:
         return JSONResponse({'error': 'Link expired or disabled'}, status_code=404)
     if not guest.get('enabled'):
@@ -6304,6 +6373,109 @@ async def api_guest_regenerate_token(request: Request):
     data.setdefault('settings', {})['guest'] = guest
     save_data(data)
     return {'status': 'success', 'token': guest['token']}
+
+
+@app.post('/api/guest-links', tags=["Guest"])
+async def api_issue_guest_link(request: Request, req: IssueGuestLinkRequest):
+    """Create a personal guest page for an external site (evilfox) instead of a raw VPN config."""
+    if not _check_admin(request):
+        return JSONResponse({'error': 'Forbidden'}, status_code=403)
+    protocol = (req.protocol or 'awg').strip() or 'awg'
+    name = (req.name or 'Guest').strip()[:80] or 'Guest'
+    external_ref = (req.external_ref or '').strip()[:120]
+    limit_gb = float(req.traffic_limit_gb or 0)
+    if limit_gb < 0:
+        limit_gb = 0
+    limit_bytes = int(limit_gb * (1024 ** 3))
+    server_id = int(req.server_id or 0)
+
+    reenable_uid = ''
+    async with DATA_LOCK:
+        data = load_data()
+        if protocol_base(protocol) != 'xui':
+            if server_id < 0 or server_id >= len(data.get('servers') or []):
+                return JSONResponse({'error': 'Server not found'}, status_code=400)
+        settings = data.setdefault('settings', {})
+        links = settings.setdefault('guest_links', [])
+        existing = None
+        if external_ref:
+            existing = next(
+                (row for row in links if isinstance(row, dict) and (row.get('external_ref') or '') == external_ref),
+                None,
+            )
+        if existing:
+            user_id = existing.get('user_id') or ''
+            if not user_id or not any(u.get('id') == user_id for u in data.get('users', [])):
+                user_id = _create_guest_link_user(data, name, external_ref)
+                existing['user_id'] = user_id
+            existing['name'] = name
+            existing['create_protocol'] = protocol
+            existing['create_server_id'] = server_id
+            existing['create_allow_server_choice'] = bool(req.allow_server_choice)
+            existing['allow_create'] = True
+            existing['traffic_limit'] = limit_bytes
+            if _guest_traffic_view(existing)['exhausted']:
+                existing['enabled'] = False
+                existing['disabled_by_traffic'] = True
+            else:
+                existing['enabled'] = True
+                existing['disabled_by_traffic'] = False
+                reenable_uid = user_id
+            token = existing.get('token') or secrets.token_urlsafe(16)
+            existing['token'] = token
+            save_data(data)
+        else:
+            user_id = _create_guest_link_user(data, name, external_ref)
+            token = secrets.token_urlsafe(16)
+            links.append({
+                'id': str(uuid.uuid4()),
+                'token': token,
+                'name': name,
+                'enabled': True,
+                'user_id': user_id,
+                'allow_create': True,
+                'create_protocol': protocol,
+                'create_server_id': server_id,
+                'create_allow_server_choice': bool(req.allow_server_choice),
+                'traffic_limit': limit_bytes,
+                'traffic_used': 0,
+                'disabled_by_traffic': False,
+                'external_ref': external_ref,
+                'created_at': datetime.now().isoformat(),
+            })
+            save_data(data)
+    if reenable_uid:
+        await _set_guest_quota_connections(reenable_uid, True, all_of_user=True)
+    url = _guest_public_url(request, token)
+    return {'status': 'success', 'url': url, 'token': token, 'user_id': user_id}
+
+
+def _create_guest_link_user(data: dict, name: str, external_ref: str) -> str:
+    taken = {u.get('username') for u in data.get('users', [])}
+    username = 'gst_' + secrets.token_hex(4)
+    while username in taken:
+        username = 'gst_' + secrets.token_hex(4)
+    user_id = str(uuid.uuid4())
+    data.setdefault('users', []).append({
+        'id': user_id,
+        'username': username,
+        'password_hash': hash_password(secrets.token_urlsafe(24)),
+        'role': 'user',
+        'telegramId': None,
+        'email': None,
+        'description': (external_ref or name or 'Guest link')[:200],
+        'traffic_limit': 0,
+        'traffic_reset_strategy': 'never',
+        'traffic_used': 0,
+        'traffic_total': 0,
+        'last_reset_at': datetime.now().isoformat(),
+        'expiration_date': None,
+        'expire_after_first_use': False,
+        'expiration_days': 0,
+        'enabled': True,
+        'created_at': datetime.now().isoformat(),
+    })
+    return user_id
 
 
 # ======================== Invite links (limited config creation) ========================
