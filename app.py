@@ -6036,19 +6036,10 @@ def _issued_guest_settings(link: dict, data: Optional[dict] = None) -> dict:
         'allowed_server_ids': [],
     }
     allowed = _evilfox_allowed_ids(data) if data is not None else []
-    if not allowed:
-        for item in link.get('allowed_server_ids') or []:
-            try:
-                sid = int(item)
-            except (TypeError, ValueError):
-                continue
-            if sid not in allowed:
-                allowed.append(sid)
-    if allowed:
-        view['allowed_server_ids'] = allowed
-        if view['create_server_id'] not in allowed:
-            view['create_server_id'] = allowed[0]
-        view['create_allow_server_choice'] = len(allowed) > 1
+    view['allowed_server_ids'] = allowed
+    view['create_allow_server_choice'] = True
+    if allowed and view['create_server_id'] not in allowed:
+        view['create_server_id'] = allowed[0]
     return view
 
 
@@ -6239,9 +6230,9 @@ async def api_guest_connections(token: str, request: Request):
     if err:
         return err
     protocol = guest.get('create_protocol') or 'xui'
+    show_servers = bool(guest.get('issued')) or bool(guest.get('allowed_server_ids')) or bool(guest.get('create_allow_server_choice', True))
     servers = _guest_choice_servers(data, guest) if (
-        guest.get('allow_create') and protocol_base(protocol) != 'xui'
-        and (guest.get('allowed_server_ids') or guest.get('create_allow_server_choice', True))
+        guest.get('allow_create') and protocol_base(protocol) != 'xui' and show_servers
     ) else []
     default_server_id = int(guest.get('create_server_id') or 0)
     if servers and all(int(s.get('id')) != default_server_id for s in servers):
@@ -6249,7 +6240,7 @@ async def api_guest_connections(token: str, request: Request):
     meta = {
         'allow_create': bool(guest.get('allow_create')),
         'create_protocol': protocol,
-        'allow_server_choice': len(servers) > 1,
+        'allow_server_choice': len(servers) >= 1,
         'default_server_id': default_server_id,
         'servers': servers,
     }
@@ -6305,8 +6296,9 @@ async def api_guest_create(token: str, req: GuestCreateRequest, request: Request
     name = (req.name or 'Guest VPN').strip() or 'Guest VPN'
     # Unique-ish name to avoid collisions
     name = f"{name}_{secrets.token_hex(3)}"
-    choice_servers = _guest_choice_servers(data, guest) if guest.get('allowed_server_ids') or guest.get('create_allow_server_choice', True) else []
-    allow_choice = len(choice_servers) > 1 if guest.get('allowed_server_ids') else bool(guest.get('create_allow_server_choice', True))
+    show_servers = bool(guest.get('issued')) or bool(guest.get('allowed_server_ids')) or bool(guest.get('create_allow_server_choice', True))
+    choice_servers = _guest_choice_servers(data, guest) if protocol_base(protocol) != 'xui' and show_servers else []
+    allow_choice = len(choice_servers) >= 1
     if choice_servers and int(guest.get('create_server_id') or 0) not in {int(s['id']) for s in choice_servers}:
         guest['create_server_id'] = int(choice_servers[0]['id'])
 
@@ -6465,10 +6457,12 @@ async def api_issue_guest_link(request: Request, req: IssueGuestLinkRequest):
                 'server_id': int(existing.get('create_server_id') or 0),
                 'protocol': existing.get('create_protocol') or protocol,
             }
-        allowed_ids = _evilfox_allowed_ids(data)
+        marked_ids = _evilfox_allowed_ids(data)
+        pickable_ids = [int(s['id']) for s in _pickable_servers_for_protocol(data, protocol)]
+        allowed_ids = [sid for sid in marked_ids if sid in pickable_ids] if marked_ids else pickable_ids
         if req.use_panel_servers and not allowed_ids:
             return JSONResponse(
-                {'error': 'В настройках панели не отмечены серверы для ссылок evilfox.win'},
+                {'error': 'Нет серверов с этим протоколом. Добавьте сервер в панели или отметьте его в «Серверы для пользователей».'},
                 status_code=400,
             )
         if allowed_ids and server_id not in allowed_ids:
@@ -6476,7 +6470,7 @@ async def api_issue_guest_link(request: Request, req: IssueGuestLinkRequest):
         if protocol_base(protocol) != 'xui':
             if server_id < 0 or server_id >= len(data.get('servers') or []):
                 return JSONResponse({'error': 'Server not found'}, status_code=400)
-        choice_on = len(allowed_ids) > 1
+        choice_on = len(allowed_ids) >= 1
         if existing:
             user_id = existing.get('user_id') or ''
             if not user_id or not any(u.get('id') == user_id for u in data.get('users', [])):

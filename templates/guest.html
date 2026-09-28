@@ -34,9 +34,10 @@
     <div id="connectionsList">
         {% if allow_create %}
         <div class="share-create">
-            <div id="guestServerPickWrap" class="form-group" style="text-align:left; margin-bottom:var(--space-sm); display:none;">
+            <div id="guestServerPickWrap" class="guest-server-menu" style="display:none;">
                 <label class="form-label">{{ _('choose_server') }}</label>
-                <select class="form-select" id="guestServerPick"></select>
+                <div id="guestServerMenu" class="guest-server-menu__list"></div>
+                <select id="guestServerPick" class="hidden" aria-hidden="true"></select>
             </div>
             <button class="btn btn-secondary share-btn-lg" type="button" onclick="createGuestConfig()" id="createBtn">
                 <span id="createBtnText">{{ _('guest_get_config') }}</span>
@@ -188,22 +189,7 @@
             const data = await res.json();
             document.getElementById('loadingState').classList.add('hidden');
 
-            const wrap = document.getElementById('guestServerPickWrap');
-            const sel = document.getElementById('guestServerPick');
-            if (wrap && sel && data.allow_server_choice && (data.servers || []).length) {
-                const prev = sel.value;
-                sel.innerHTML = '';
-                (data.servers || []).forEach(s => {
-                    const opt = document.createElement('option');
-                    opt.value = String(s.id);
-                    opt.textContent = s.host ? `${s.name} (${s.host})` : s.name;
-                    if (String(s.id) === String(prev) || String(s.id) === String(data.default_server_id)) opt.selected = true;
-                    sel.appendChild(opt);
-                });
-                wrap.style.display = '';
-            } else if (wrap) {
-                wrap.style.display = 'none';
-            }
+            renderGuestServers(data.servers || [], data.default_server_id);
 
             const traffic = data.traffic || {};
             const note = document.getElementById('guestTrafficNote');
@@ -259,6 +245,48 @@
         } catch (err) {
             console.error(err);
         }
+    }
+
+    function selectGuestServer(id) {
+        const sel = document.getElementById('guestServerPick');
+        if (sel) sel.value = String(id);
+        document.querySelectorAll('.guest-server-item').forEach(el => {
+            el.classList.toggle('is-active', el.dataset.id === String(id));
+        });
+    }
+
+    function renderGuestServers(servers, defaultId) {
+        const wrap = document.getElementById('guestServerPickWrap');
+        const menu = document.getElementById('guestServerMenu');
+        const sel = document.getElementById('guestServerPick');
+        if (!wrap || !menu || !sel) return;
+        if (!servers.length) {
+            wrap.style.display = 'none';
+            sel.innerHTML = '';
+            menu.innerHTML = '';
+            return;
+        }
+        const prev = sel.value;
+        sel.innerHTML = '';
+        menu.innerHTML = '';
+        servers.forEach(s => {
+            const opt = document.createElement('option');
+            opt.value = String(s.id);
+            opt.textContent = s.name || '';
+            sel.appendChild(opt);
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'guest-server-item';
+            btn.dataset.id = String(s.id);
+            const host = s.host ? `<span class="guest-server-item__host">${escHtml(s.host)}</span>` : '';
+            btn.innerHTML = `<span class="guest-server-item__name">${escHtml(s.name)}</span>${host}`;
+            btn.addEventListener('click', () => selectGuestServer(s.id));
+            menu.appendChild(btn);
+        });
+        const known = servers.some(s => String(s.id) === String(prev));
+        const fallback = servers.some(s => String(s.id) === String(defaultId)) ? defaultId : servers[0].id;
+        selectGuestServer(known ? prev : fallback);
+        wrap.style.display = '';
     }
 
     async function createGuestConfig() {
@@ -394,6 +422,41 @@
         font-size: 0.95rem;
         line-height: 1.4;
         border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+    }
+    .guest-server-menu {
+        text-align: left;
+        margin-bottom: var(--space-sm);
+    }
+    .guest-server-menu__list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        margin-top: 8px;
+    }
+    .guest-server-item {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 2px;
+        width: 100%;
+        padding: 10px 12px;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        background: var(--bg-secondary);
+        color: var(--text-primary);
+        cursor: pointer;
+        text-align: left;
+    }
+    .guest-server-item.is-active {
+        border-color: var(--accent);
+        background: var(--accent-glow);
+    }
+    .guest-server-item__name {
+        font-weight: 600;
+    }
+    .guest-server-item__host {
+        color: var(--text-muted);
+        font-size: 0.85rem;
     }
     .share-create {
         margin-bottom: var(--space-md);
