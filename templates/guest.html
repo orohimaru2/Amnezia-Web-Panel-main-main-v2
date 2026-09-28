@@ -34,14 +34,25 @@
     <div id="connectionsList">
         {% if allow_create %}
         <div class="share-create">
-            <div id="guestProtocolPickWrap" class="guest-server-menu" style="display:none;">
-                <label class="form-label">{{ _('choose_protocol') }}</label>
+            <div id="guestProtocolPickWrap" class="guest-pick" style="display:none;">
+                <div class="guest-pick__head">
+                    <span class="guest-pick__label">{{ _('choose_protocol') }}</span>
+                </div>
                 <div id="guestProtocolMenu" class="guest-proto-menu"></div>
                 <select id="guestProtocolPick" class="hidden" aria-hidden="true"></select>
             </div>
-            <div id="guestServerPickWrap" class="guest-server-menu" style="display:none;">
-                <label class="form-label">{{ _('choose_server') }}</label>
+            <div id="guestServerPickWrap" class="guest-pick" style="display:none;">
+                <div class="guest-pick__head">
+                    <span class="guest-pick__label">{{ _('choose_server') }}</span>
+                    <span id="guestServerCount" class="guest-pick__count"></span>
+                </div>
+                <label id="guestServerSearchWrap" class="guest-search" hidden>
+                    {{ icon('search') }}
+                    <input id="guestServerSearch" type="search" placeholder="{{ _('invite_servers_search') }}" autocomplete="off" enterkeyhint="search">
+                </label>
+                <div id="guestServerPin" class="guest-server-pin" hidden></div>
                 <div id="guestServerMenu" class="guest-server-menu__list"></div>
+                <p id="guestServerEmpty" class="guest-search-empty hidden">{{ _('nothing_found') }}</p>
                 <select id="guestServerPick" class="hidden" aria-hidden="true"></select>
             </div>
             <button class="btn btn-secondary share-btn-lg" type="button" onclick="createGuestConfig()" id="createBtn">
@@ -114,6 +125,19 @@
             .replace(/"/g, '&quot;');
     }
 
+    const PROTO_ICONS = {
+        awg3: 'shield',
+        awg2: 'sparkles',
+        awg: 'sparkles',
+        wireguard: 'network',
+        naiveproxy: 'lock',
+    };
+
+    function protoIcon(p) {
+        const base = String(p || '').split('__')[0];
+        return PROTO_ICONS[base] || 'server';
+    }
+
     function protoLabel(p) {
         if (p === 'awg') return 'AmneziaWG';
         if (p === 'awg3') return 'AmneziaWG 3.1';
@@ -125,6 +149,7 @@
         if (p === 'naiveproxy') return 'NaiveProxy';
         if (p === 'mieru') return 'Mieru';
         if (p === 'telemt') return 'Telemt';
+        if (p === 'wireguard') return 'WireGuard';
         return (p || '').toUpperCase();
     }
 
@@ -230,7 +255,8 @@
             grid.innerHTML = data.connections.map(c => `
                 <article class="share-card" data-conn-id="${escHtml(c.id)}">
                     <div class="share-card-top">
-                        <div>
+                        <span class="guest-ico">${uiIcon(protoIcon(c.protocol))}</span>
+                        <div style="min-width:0;flex:1;">
                             <div class="share-card-name">${escHtml(c.name)}</div>
                             <div class="share-card-meta">${escHtml(protoLabel(c.protocol))} · ${escHtml(c.server_name || '')}</div>
                         </div>
@@ -287,6 +313,7 @@
         }
         sel.innerHTML = '';
         menu.innerHTML = '';
+        menu.classList.toggle('is-single', protocols.length < 2);
         protocols.forEach(p => {
             const opt = document.createElement('option');
             opt.value = String(p.id);
@@ -296,7 +323,8 @@
             btn.type = 'button';
             btn.className = 'guest-proto-item';
             btn.dataset.id = String(p.id);
-            btn.textContent = p.label || p.id;
+            const icon = p.icon || protoIcon(p.id);
+            btn.innerHTML = `<span class="guest-proto-item__ico">${uiIcon(icon)}</span><span>${escHtml(p.label || p.id)}</span>`;
             btn.addEventListener('click', () => selectGuestProtocol(p.id));
             menu.appendChild(btn);
         });
@@ -305,18 +333,57 @@
         wrap.style.display = '';
     }
 
-    function selectGuestServer(id) {
+    function updateGuestPin() {
+        const pin = document.getElementById('guestServerPin');
+        const menu = document.getElementById('guestServerMenu');
+        if (!pin || !menu) return;
+        const active = menu.querySelector('.guest-server-item.is-active');
+        const show = menu.classList.contains('is-scroll') && menu.querySelectorAll('.guest-server-item').length >= 6 && active;
+        pin.hidden = !show;
+        pin.innerHTML = show ? active.innerHTML : '';
+    }
+
+    function selectGuestServer(id, scroll) {
         const sel = document.getElementById('guestServerPick');
         if (sel) sel.value = String(id);
         document.querySelectorAll('.guest-server-item').forEach(el => {
-            el.classList.toggle('is-active', el.dataset.id === String(id));
+            const on = el.dataset.id === String(id);
+            el.classList.toggle('is-active', on);
+            el.setAttribute('aria-pressed', on ? 'true' : 'false');
+            if (on && scroll && !el.hidden) el.scrollIntoView({ block: 'nearest' });
         });
+        updateGuestPin();
+    }
+
+    document.addEventListener('input', (e) => {
+        if (e.target && e.target.id === 'guestServerSearch') filterGuestServers();
+    });
+
+    function filterGuestServers() {
+        const input = document.getElementById('guestServerSearch');
+        const menu = document.getElementById('guestServerMenu');
+        const empty = document.getElementById('guestServerEmpty');
+        const count = document.getElementById('guestServerCount');
+        if (!menu) return;
+        const q = (input && !input.closest('.guest-search')?.hidden ? input.value : '').trim().toLowerCase();
+        let shown = 0;
+        const items = menu.querySelectorAll('.guest-server-item');
+        items.forEach(btn => {
+            const hay = (btn.getAttribute('data-search') || '').toLowerCase();
+            const ok = !q || hay.includes(q);
+            btn.hidden = !ok;
+            if (ok) shown += 1;
+        });
+        if (empty) empty.classList.toggle('hidden', shown !== 0 || !items.length);
+        if (count) count.textContent = q ? `${shown} / ${items.length}` : String(items.length);
     }
 
     function renderGuestServers(servers, defaultId) {
         const wrap = document.getElementById('guestServerPickWrap');
         const menu = document.getElementById('guestServerMenu');
         const sel = document.getElementById('guestServerPick');
+        const searchWrap = document.getElementById('guestServerSearchWrap');
+        const search = document.getElementById('guestServerSearch');
         if (!wrap || !menu || !sel) return;
         if (!servers.length) {
             wrap.style.display = 'none';
@@ -327,6 +394,10 @@
         const prev = sel.value;
         sel.innerHTML = '';
         menu.innerHTML = '';
+        const many = servers.length >= 5;
+        menu.classList.toggle('is-scroll', servers.length >= 4);
+        if (searchWrap) searchWrap.hidden = !many;
+        if (search && !many) search.value = '';
         servers.forEach(s => {
             const opt = document.createElement('option');
             opt.value = String(s.id);
@@ -336,14 +407,23 @@
             btn.type = 'button';
             btn.className = 'guest-server-item';
             btn.dataset.id = String(s.id);
+            btn.dataset.search = `${s.name || ''} ${s.host || ''}`;
             const host = s.host ? `<span class="guest-server-item__host">${escHtml(s.host)}</span>` : '';
-            btn.innerHTML = `<span class="guest-server-item__name">${escHtml(s.name)}</span>${host}`;
-            btn.addEventListener('click', () => selectGuestServer(s.id));
+            btn.innerHTML = `
+                <span class="guest-ico">${uiIcon('server')}</span>
+                <span class="guest-server-item__copy">
+                    <span class="guest-server-item__name">${escHtml(s.name)}</span>
+                    ${host}
+                </span>
+                <span class="guest-server-item__check">${uiIcon('check')}</span>`;
+            btn.addEventListener('click', () => selectGuestServer(s.id, true));
             menu.appendChild(btn);
         });
         const known = servers.some(s => String(s.id) === String(prev));
         const fallback = servers.some(s => String(s.id) === String(defaultId)) ? defaultId : servers[0].id;
         selectGuestServer(known ? prev : fallback);
+        filterGuestServers();
+        updateGuestPin();
         wrap.style.display = '';
     }
 
@@ -486,42 +566,139 @@
         line-height: 1.4;
         border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
     }
-    .guest-server-menu {
+    .guest-pick {
         text-align: left;
-        margin-bottom: var(--space-sm);
+        margin-bottom: 0.85rem;
+    }
+    .guest-pick__head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 8px;
+    }
+    .guest-pick__label {
+        font-size: 0.82rem;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        color: var(--text-muted);
+    }
+    .guest-pick__count {
+        min-width: 1.6rem;
+        padding: 0.1rem 0.45rem;
+        border-radius: 999px;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border);
+        color: var(--text-muted);
+        font-size: 0.75rem;
+        font-variant-numeric: tabular-nums;
+        text-align: center;
     }
     .guest-proto-menu {
-        display: flex;
-        flex-wrap: wrap;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
         gap: 8px;
-        margin-top: 8px;
+    }
+    .guest-proto-menu.is-single {
+        grid-template-columns: 1fr;
     }
     .guest-proto-item {
-        padding: 8px 12px;
-        border-radius: 999px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 46px;
+        padding: 8px 10px;
+        border-radius: 14px;
         border: 1px solid var(--border);
         background: var(--bg-secondary);
         color: var(--text-primary);
         cursor: pointer;
+        text-align: left;
+        font-weight: 600;
+        font-size: 0.92rem;
+    }
+    .guest-proto-item__ico,
+    .guest-ico {
+        width: 28px;
+        height: 28px;
+        border-radius: 8px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        background: color-mix(in srgb, var(--accent) 14%, transparent);
+        color: var(--accent);
+    }
+    .guest-proto-item__ico .ui-icon,
+    .guest-ico .ui-icon {
+        width: 16px;
+        height: 16px;
     }
     .guest-proto-item.is-active {
         border-color: var(--accent);
         background: var(--accent-glow);
+        box-shadow: inset 0 0 0 1px var(--accent);
+    }
+    .guest-search {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 8px;
+        padding: 0 12px;
+        min-height: 44px;
+        border-radius: 14px;
+        border: 1px solid var(--border);
+        background: var(--bg-secondary);
+        color: var(--text-muted);
+    }
+    .guest-search .ui-icon {
+        width: 16px;
+        height: 16px;
+        flex-shrink: 0;
+    }
+    .guest-search input {
+        flex: 1;
+        min-width: 0;
+        border: 0;
+        outline: none;
+        background: transparent;
+        color: var(--text-primary);
+        font: inherit;
+        font-size: 0.95rem;
+    }
+    .guest-server-pin {
+        display: grid;
+        grid-template-columns: 36px minmax(0, 1fr) 18px;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 8px;
+        padding: 8px 10px;
+        border-radius: 14px;
+        border: 1px solid var(--accent);
+        background: var(--accent-glow);
+        pointer-events: none;
+    }
+    .guest-server-pin .guest-server-item__check {
+        opacity: 1;
     }
     .guest-server-menu__list {
         display: flex;
         flex-direction: column;
-        gap: 8px;
-        margin-top: 8px;
+        gap: 6px;
+    }
+    .guest-server-menu__list.is-scroll {
+        max-height: min(46vh, 320px);
+        overflow: auto;
+        padding-right: 2px;
     }
     .guest-server-item {
-        display: flex;
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 2px;
+        display: grid;
+        grid-template-columns: 36px minmax(0, 1fr) 18px;
+        align-items: center;
+        gap: 10px;
         width: 100%;
-        padding: 10px 12px;
-        border-radius: 12px;
+        padding: 8px 10px;
+        border-radius: 14px;
         border: 1px solid var(--border);
         background: var(--bg-secondary);
         color: var(--text-primary);
@@ -532,12 +709,42 @@
         border-color: var(--accent);
         background: var(--accent-glow);
     }
+    .guest-server-item__copy {
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+    }
     .guest-server-item__name {
         font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
     .guest-server-item__host {
         color: var(--text-muted);
-        font-size: 0.85rem;
+        font-size: 0.78rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .guest-server-item__check {
+        color: var(--accent);
+        opacity: 0;
+        display: inline-flex;
+    }
+    .guest-server-item__check .ui-icon {
+        width: 16px;
+        height: 16px;
+    }
+    .guest-server-item.is-active .guest-server-item__check {
+        opacity: 1;
+    }
+    .guest-search-empty {
+        margin: 8px 0 0;
+        text-align: center;
+        color: var(--text-muted);
+        font-size: 0.9rem;
     }
     .share-create {
         margin-bottom: var(--space-md);
@@ -581,7 +788,7 @@
     .share-card-top {
         display: flex;
         justify-content: space-between;
-        align-items: flex-start;
+        align-items: center;
         gap: var(--space-sm);
         text-align: left;
     }

@@ -6064,6 +6064,16 @@ def _evilfox_protocol_map(data: dict) -> dict:
     return out
 
 
+def _evilfox_proto_icon(code: str) -> str:
+    base = protocol_base(code)
+    if base == 'awg':
+        base = 'awg2'
+    for item, _label, icon_name in _EVILFOX_PROTO_CHOICES:
+        if item == base:
+            return icon_name
+    return 'server'
+
+
 def _evilfox_canonical_protocol(installed: list, code: str) -> Optional[str]:
     have = set(installed)
     if code == 'awg2':
@@ -6218,7 +6228,7 @@ def _guest_catalog(data: dict, guest: dict) -> tuple:
     preferred = protocol_base(guest.get('create_protocol') or '')
     family = _protocol_family(preferred) if preferred else set()
     default_protocol = next((p for p in proto_ids if p in family), proto_ids[0] if proto_ids else preferred)
-    protocols = [{'id': p, 'label': _invite_proto_label(p)} for p in proto_ids]
+    protocols = [{'id': p, 'label': _invite_proto_label(p), 'icon': _evilfox_proto_icon(p)} for p in proto_ids]
     return rows, protocols, default_protocol
 
 
