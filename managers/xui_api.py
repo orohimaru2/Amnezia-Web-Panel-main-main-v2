@@ -213,6 +213,7 @@ class XuiApi:
         inbound_id: int,
         enable: bool = True,
         expiry_time: int = 0,
+        total_bytes: int = 0,
     ) -> dict:
         """Add client via 3x-ui addClient only. Minimal payload; flow taken from inbound."""
         email = (email or '').strip()
@@ -236,7 +237,7 @@ class XuiApi:
             'enable': bool(enable),
             'flow': tmpl['flow'],
             'limitIp': tmpl['limitIp'],
-            'totalGB': 0,
+            'totalGB': max(0, int(total_bytes or 0)),
             'expiryTime': int(expiry_time or 0),
             'tgId': tmpl['tgId'],
             'subId': sub_id,
@@ -447,6 +448,7 @@ async def xui_create_vless_config(
     inbound_id: Optional[int] = None,
     expiry_time: int = 0,
     panel_id: Optional[str] = None,
+    total_bytes: int = 0,
 ) -> dict:
     """Create client on selected 3x-ui inbound; return only links from the panel."""
     scoped = _resolve_settings(settings, panel_id)
@@ -470,6 +472,7 @@ async def xui_create_vless_config(
                     email=email,
                     inbound_id=inbound,
                     expiry_time=int(expiry_time or 0),
+                    total_bytes=int(total_bytes or 0),
                 )
                 break
             except XuiApiError as e:
@@ -482,6 +485,7 @@ async def xui_create_vless_config(
                 email=email,
                 inbound_id=inbound,
                 expiry_time=int(expiry_time or 0),
+                total_bytes=int(total_bytes or 0),
             )
 
         share = await api.resolve_share_link(

@@ -334,6 +334,9 @@ def _row_to_connection(row) -> dict:
         'xui_panel_id': (row.get('xui_panel_id') or '') if hasattr(row, 'get') else (row['xui_panel_id'] if 'xui_panel_id' in row else ''),
         'created_at': _ts_iso(row['created_at']),
         'last_bytes': int(row['last_bytes'] or 0),
+        'invite_id': str(row['invite_id']) if row.get('invite_id') else '',
+        'traffic_used': int(row.get('traffic_used') or 0),
+        'invite_limited': bool(row.get('invite_limited') or False),
     }
 
 
@@ -365,6 +368,7 @@ def _row_to_invite(row) -> dict:
         'password_hash': row['password_hash'],
         'expires_at': _ts_iso(row['expires_at']),
         'duration_days': int(row.get('duration_days') or 0),
+        'traffic_limit': int(row.get('traffic_limit') or 0),
         'note': row['note'] or '',
         'created_at': _ts_iso(row['created_at']),
     }
@@ -400,7 +404,8 @@ def _fetch_data_from_db() -> dict:
 
             cur.execute(
                 'SELECT id, user_id, server_id, protocol, client_id, name, '
-                'xui_panel_id, created_at, last_bytes FROM user_connections '
+                'xui_panel_id, created_at, last_bytes, invite_id, traffic_used, invite_limited '
+                'FROM user_connections '
                 'ORDER BY created_at NULLS LAST, id'
             )
             user_connections = [_row_to_connection(r) for r in cur.fetchall()]
@@ -415,7 +420,7 @@ def _fetch_data_from_db() -> dict:
             cur.execute(
                 'SELECT id, name, token, enabled, max_uses, used_count, user_id, '
                 'protocol, server_id, xui_inbound_id, xui_panel_id, password_hash, expires_at, '
-                'duration_days, note, created_at FROM invite_links '
+                'duration_days, traffic_limit, note, created_at FROM invite_links '
                 'ORDER BY created_at DESC NULLS LAST, name'
             )
             invite_links = [_row_to_invite(r) for r in cur.fetchall()]
@@ -675,8 +680,9 @@ def save_data(data: dict, *, replace_tokens: bool = False) -> None:
                 for conn_row in connections:
                     cur.execute(
                         'INSERT INTO user_connections ('
-                        'id, user_id, server_id, protocol, client_id, name, xui_panel_id, created_at, last_bytes'
-                        ') VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)',
+                        'id, user_id, server_id, protocol, client_id, name, xui_panel_id, created_at, last_bytes, '
+                        'invite_id, traffic_used, invite_limited'
+                        ') VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',
                         (
                             _as_uuid(conn_row['id']),
                             _as_uuid(conn_row['user_id']),
@@ -687,6 +693,9 @@ def save_data(data: dict, *, replace_tokens: bool = False) -> None:
                             conn_row.get('xui_panel_id') or '',
                             _parse_ts(conn_row.get('created_at')),
                             int(conn_row.get('last_bytes') or 0),
+                            _as_uuid(conn_row['invite_id']) if _is_valid_uuid(conn_row.get('invite_id')) else None,
+                            int(conn_row.get('traffic_used') or 0),
+                            bool(conn_row.get('invite_limited')),
                         ),
                     )
 
@@ -699,8 +708,8 @@ def save_data(data: dict, *, replace_tokens: bool = False) -> None:
                         'INSERT INTO invite_links ('
                         'id, name, token, enabled, max_uses, used_count, user_id, '
                         'protocol, server_id, xui_inbound_id, xui_panel_id, password_hash, expires_at, '
-                        'duration_days, note, created_at'
-                        ') VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',
+                        'duration_days, traffic_limit, note, created_at'
+                        ') VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',
                         (
                             _as_uuid(link['id']),
                             link.get('name') or '',
@@ -716,6 +725,7 @@ def save_data(data: dict, *, replace_tokens: bool = False) -> None:
                             link.get('password_hash'),
                             _parse_ts(link.get('expires_at')),
                             int(link.get('duration_days') or 0),
+                            int(link.get('traffic_limit') or 0),
                             link.get('note') or '',
                             _parse_ts(link.get('created_at')),
                         ),

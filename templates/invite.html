@@ -46,6 +46,15 @@
                 </div>
             </div>
         </div>
+        <div class="invite-stat">
+            <div class="invite-stat-ico">{{ icon('globe') }}</div>
+            <div>
+                <div class="invite-stat-label">{{ _('invite_traffic_short') }}</div>
+                <div class="invite-stat-value">
+                    {% if invite.traffic_limit_text %}{{ invite.traffic_limit_text }} {{ _('gb') }}{% else %}∞{% endif %}
+                </div>
+            </div>
+        </div>
     </div>
 
     <p id="statusHint" class="invite-status-note">
@@ -53,6 +62,9 @@
         {{ _('invite_duration_starts_hint').replace('{}', invite.duration_days|string) }}
         {% else %}
         {{ _('invite_get_config_hint') }}
+        {% endif %}
+        {% if invite.traffic_limit_text %}
+        {{ _('invite_traffic_public_hint').replace('{}', invite.traffic_limit_text) }}
         {% endif %}
     </p>
 

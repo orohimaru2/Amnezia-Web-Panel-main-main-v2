@@ -2620,6 +2620,7 @@ class InviteCreateRequest(BaseModel):
     xui_panel_id: str = ''
     password: Optional[str] = None
     duration_days: int = 0  # client lifetime after redeem; 0 = no expiry
+    traffic_limit_gb: float = 0  # per issued config; 0 = unlimited
     note: str = ''
     enabled: bool = True
     allow_server_choice: bool = True
@@ -2637,6 +2638,7 @@ class InviteUpdateRequest(BaseModel):
     password: Optional[str] = None
     clear_password: bool = False
     duration_days: Optional[int] = None
+    traffic_limit_gb: Optional[float] = None
     note: Optional[str] = None
     enabled: Optional[bool] = None
     reset_used: bool = False
@@ -2849,6 +2851,41 @@ def _scrape_server_traffic(server, sid, my_conns):
     return server_updates
 
 
+async def _set_invite_connection_enabled(conn: dict, enabled: bool) -> None:
+    """Turn one invite-issued config on or off when its traffic limit changes."""
+    data = load_data()
+    if protocol_base(conn.get('protocol', '')) == 'xui':
+        from managers.xui_api import xui_toggle_client
+        await xui_toggle_client(
+            data.get('settings', {}),
+            conn['client_id'],
+            enabled,
+            panel_id=conn.get('xui_panel_id') or None,
+        )
+    else:
+        sid = int(conn.get('server_id') or 0)
+        servers = data.get('servers') or []
+        if sid < 0 or sid >= len(servers):
+            return
+        server = servers[sid]
+        ssh = get_ssh(server)
+        await asyncio.to_thread(ssh.connect)
+        try:
+            manager = get_protocol_manager(ssh, conn['protocol'])
+            await asyncio.to_thread(
+                _manager_call, manager, 'toggle_client',
+                conn['protocol'], conn['client_id'], enabled,
+            )
+        finally:
+            await asyncio.to_thread(ssh.disconnect)
+    async with DATA_LOCK:
+        data = load_data()
+        for row in data.get('user_connections', []):
+            if row.get('id') == conn.get('id'):
+                row['invite_limited'] = not enabled
+        save_data(data)
+
+
 async def periodic_background_tasks():
     """Background task to sync traffic limits and Remnawave every 10 minutes"""
     while True:
@@ -2889,12 +2926,14 @@ async def periodic_background_tasks():
 
             to_disable_uids = []
             guest_quota_uids = []
+            invite_toggles = []
             if updates:
                 async with DATA_LOCK:
                     curr_data = load_data()
                     users_map = {u['id']: u for u in curr_data.get('users', [])}
                     uc_list = curr_data.get('user_connections', [])
                     uc_map = {uc['id']: uc for uc in uc_list}
+                    invites_by_id = {str(x.get('id')): x for x in (curr_data.get('invite_links') or [])}
                     
                     # Current date/time for reset checking
                     now = datetime.now()
@@ -2938,6 +2977,16 @@ async def periodic_background_tasks():
 
                                 if _bump_guest_traffic(curr_data, uid, delta) and uid not in guest_quota_uids:
                                     guest_quota_uids.append(uid)
+
+                                invite_id = str(uc_map[uc_id].get('invite_id') or '')
+                                if invite_id:
+                                    peer = uc_map[uc_id]
+                                    peer['traffic_used'] = int(peer.get('traffic_used') or 0) + int(delta)
+                                    inv = invites_by_id.get(invite_id)
+                                    cap = int(inv.get('traffic_limit') or 0) if inv else 0
+                                    over = cap > 0 and peer['traffic_used'] >= cap
+                                    if over != bool(peer.get('invite_limited')):
+                                        invite_toggles.append((dict(peer), not over))
                                 
                                 # Check expiration date (naive/aware-safe)
                                 if u.get('enabled', True):
@@ -2960,6 +3009,11 @@ async def periodic_background_tasks():
             for guest_quota_uid in guest_quota_uids:
                 logger.info("Guest link traffic limit reached for user %s", guest_quota_uid)
                 await _block_guest_for_traffic(guest_quota_uid)
+            for conn, enabled in invite_toggles:
+                try:
+                    await _set_invite_connection_enabled(conn, enabled)
+                except Exception:
+                    logger.exception('Invite traffic toggle failed for %s', conn.get('id'))
 
             # --- 2. REMNAWAVE SYNC ---
             logger.info("Starting background Remnawave sync...")
@@ -7145,12 +7199,32 @@ def _resolve_chosen_server_id(
     return sid
 
 
+def _gb_to_bytes(value) -> int:
+    try:
+        gb = float(value or 0)
+    except (TypeError, ValueError):
+        gb = 0
+    if gb < 0:
+        gb = 0
+    return int(gb * (1024 ** 3))
+
+
+def _format_gb(num_bytes: int) -> str:
+    if int(num_bytes or 0) <= 0:
+        return ''
+    gb = int(num_bytes) / (1024 ** 3)
+    if abs(gb - round(gb)) < 0.05:
+        return str(int(round(gb)))
+    return f'{gb:.1f}'
+
+
 def _invite_public_view(link: dict, data: Optional[dict] = None) -> dict:
     max_uses = int(link.get('max_uses') or 0)
     used = int(link.get('used_count') or 0)
     remaining = None if max_uses <= 0 else max(0, max_uses - used)
     exhausted = remaining is not None and remaining <= 0
     duration_days = int(link.get('duration_days') or 0)
+    traffic_limit = int(link.get('traffic_limit') or 0)
     protocol = link.get('protocol') or 'awg'
     servers = _invite_choices(link, data) if data is not None else []
     allow_server_choice = len(servers) > 1
@@ -7174,6 +7248,9 @@ def _invite_public_view(link: dict, data: Optional[dict] = None) -> dict:
         'xui_inbound_id': int(link.get('xui_inbound_id') or 0),
         'xui_panel_id': link.get('xui_panel_id') or '',
         'duration_days': duration_days,
+        'traffic_limit': traffic_limit,
+        'traffic_limit_gb': round(traffic_limit / (1024 ** 3), 2) if traffic_limit else 0,
+        'traffic_limit_text': _format_gb(traffic_limit),
         'user_id': link.get('user_id') or '',
         'note': link.get('note') or '',
         'created_at': link.get('created_at'),
@@ -7298,6 +7375,7 @@ async def _create_config_for_protocol(
     xui_inbound_id: Optional[int] = None,
     xui_panel_id: Optional[str] = None,
     duration_days: int = 0,
+    traffic_bytes: int = 0,
 ) -> dict:
     """Create VPN client; returns {client_id, config, subscription_url, protocol, server_id}."""
     protocol = protocol or 'xui'
@@ -7325,6 +7403,7 @@ async def _create_config_for_protocol(
             inbound_id=inbound,
             expiry_time=expiry_ms,
             panel_id=panel_id,
+            total_bytes=int(traffic_bytes or 0),
         )
         return {
             'client_id': created['client_id'],
@@ -7421,6 +7500,8 @@ async def api_create_invite(request: Request, req: InviteCreateRequest):
         return JSONResponse({'error': 'max_uses must be >= 0'}, status_code=400)
     if req.duration_days < 0:
         return JSONResponse({'error': 'duration_days must be >= 0'}, status_code=400)
+    if float(req.traffic_limit_gb or 0) < 0:
+        return JSONResponse({'error': 'traffic_limit_gb must be >= 0'}, status_code=400)
     data = load_data()
     if req.user_id and not any(u['id'] == req.user_id for u in data['users']):
         return JSONResponse({'error': 'User not found'}, status_code=400)
@@ -7458,6 +7539,7 @@ async def api_create_invite(request: Request, req: InviteCreateRequest):
         'password_hash': hash_password(req.password) if req.password else None,
         'expires_at': None,
         'duration_days': int(req.duration_days or 0),
+        'traffic_limit': _gb_to_bytes(req.traffic_limit_gb),
         'note': req.note or '',
         'allow_server_choice': len(options) > 1,
         'created_at': datetime.now().isoformat(),
@@ -7511,6 +7593,10 @@ async def api_update_invite(request: Request, invite_id: str, req: InviteUpdateR
         if req.duration_days < 0:
             return JSONResponse({'error': 'duration_days must be >= 0'}, status_code=400)
         link['duration_days'] = int(req.duration_days)
+    if req.traffic_limit_gb is not None:
+        if float(req.traffic_limit_gb) < 0:
+            return JSONResponse({'error': 'traffic_limit_gb must be >= 0'}, status_code=400)
+        link['traffic_limit'] = _gb_to_bytes(req.traffic_limit_gb)
     if req.clear_password:
         link['password_hash'] = None
     elif req.password:
@@ -7612,6 +7698,8 @@ async def api_invite_info(token: str, request: Request):
         'server_id': view['server_id'],
         'servers': view.get('servers') or [],
         'duration_days': view['duration_days'],
+        'traffic_limit_gb': view['traffic_limit_gb'],
+        'traffic_limit_text': view['traffic_limit_text'],
     }
 
 
@@ -7772,6 +7860,7 @@ async def api_invite_create_config(token: str, req: InviteRedeemRequest, request
             xui_inbound_id=choice_inbound,
             xui_panel_id=choice_panel,
             duration_days=int(link.get('duration_days') or 0),
+            traffic_bytes=int(link.get('traffic_limit') or 0),
         )
         conn = {
             'id': str(uuid.uuid4()),
@@ -7781,6 +7870,7 @@ async def api_invite_create_config(token: str, req: InviteRedeemRequest, request
             'client_id': created['client_id'],
             'name': name,
             'invite_id': link.get('id'),
+            'traffic_used': 0,
             'xui_panel_id': created.get('xui_panel_id') or choice_panel or '',
             'created_at': datetime.now().isoformat(),
         }

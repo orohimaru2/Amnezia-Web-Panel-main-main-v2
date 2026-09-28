@@ -93,6 +93,15 @@
                         </div>
                     </div>
                 </div>
+                <div class="invite-stat">
+                    <div class="invite-stat-ico">{{ icon('globe') }}</div>
+                    <div>
+                        <div class="invite-stat-label">{{ _('invite_traffic_short') }}</div>
+                        <div class="invite-stat-value">
+                            {% if inv.traffic_limit_text %}{{ inv.traffic_limit_text }} {{ _('gb') }}{% else %}∞{% endif %}
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <div class="invite-admin-actions">
@@ -123,7 +132,7 @@
             <input class="form-input" type="text" id="inviteName" placeholder="Promo / Friends">
         </div>
 
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:var(--space-md);">
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:var(--space-md);">
             <div class="form-group">
                 <label class="form-label invite-label">{{ icon('key') }} {{ _('invite_max_uses_label') }}</label>
                 <input class="form-input" type="number" id="inviteMaxUses" min="0" value="1">
@@ -133,6 +142,11 @@
                 <label class="form-label invite-label">{{ icon('sparkles') }} {{ _('invite_duration_label') }}</label>
                 <input class="form-input" type="number" id="inviteDurationDays" min="0" value="0">
                 <div class="form-hint">{{ _('invite_duration_hint') }}</div>
+            </div>
+            <div class="form-group">
+                <label class="form-label invite-label">{{ icon('globe') }} {{ _('invite_traffic_label') }}</label>
+                <input class="form-input" type="number" id="inviteTrafficGb" min="0" step="0.1" value="0">
+                <div class="form-hint">{{ _('invite_traffic_hint') }}</div>
             </div>
         </div>
 
@@ -740,6 +754,7 @@
         document.getElementById('inviteName').value = '';
         document.getElementById('inviteMaxUses').value = '1';
         document.getElementById('inviteDurationDays').value = '0';
+        document.getElementById('inviteTrafficGb').value = '0';
         document.getElementById('inviteUserId').value = '';
         document.getElementById('invitePassword').value = '';
         document.getElementById('inviteNote').value = '';
@@ -763,6 +778,7 @@
         document.getElementById('inviteName').value = inv.name || '';
         document.getElementById('inviteMaxUses').value = String(inv.max_uses ?? 1);
         document.getElementById('inviteDurationDays').value = String(inv.duration_days ?? 0);
+        document.getElementById('inviteTrafficGb').value = String(inv.traffic_limit_gb ?? 0);
         document.getElementById('inviteUserId').value = inv.user_id || '';
         document.getElementById('invitePassword').value = '';
         document.getElementById('inviteNote').value = inv.note || '';
@@ -797,6 +813,7 @@
                 name: document.getElementById('inviteName').value || 'Invite',
                 max_uses: parseInt(document.getElementById('inviteMaxUses').value || '1'),
                 duration_days: parseInt(document.getElementById('inviteDurationDays').value || '0'),
+                traffic_limit_gb: parseFloat(document.getElementById('inviteTrafficGb').value || '0') || 0,
                 user_id: document.getElementById('inviteUserId').value || '',
                 protocol: first.protocol,
                 server_id: first.server_id || 0,

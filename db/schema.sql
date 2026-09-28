@@ -46,7 +46,10 @@ CREATE TABLE IF NOT EXISTS user_connections (
     name TEXT NOT NULL DEFAULT '',
     xui_panel_id TEXT NOT NULL DEFAULT '',
     created_at TIMESTAMPTZ,
-    last_bytes BIGINT NOT NULL DEFAULT 0
+    last_bytes BIGINT NOT NULL DEFAULT 0,
+    invite_id UUID,
+    traffic_used BIGINT NOT NULL DEFAULT 0,
+    invite_limited BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 CREATE INDEX IF NOT EXISTS idx_user_connections_user_id ON user_connections(user_id);
@@ -90,6 +93,7 @@ CREATE TABLE IF NOT EXISTS invite_links (
     password_hash TEXT,
     expires_at TIMESTAMPTZ,
     duration_days INTEGER NOT NULL DEFAULT 0,
+    traffic_limit BIGINT NOT NULL DEFAULT 0,
     note TEXT,
     created_at TIMESTAMPTZ
 );
