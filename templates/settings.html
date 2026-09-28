@@ -86,6 +86,18 @@
                     </div>
 
                     <div class="form-group">
+                        <label class="form-label">{{ _('guest_traffic_limit') }}</label>
+                        <input type="number" min="0" step="0.1" class="form-input" id="guest_traffic_limit"
+                            value="{% if settings.guest.traffic_limit %}{{ '%.2f'|format(settings.guest.traffic_limit / (1024**3)) }}{% else %}0{% endif %}">
+                        <div class="form-hint">
+                            {{ _('guest_traffic_limit_hint') }}
+                            {% if settings.guest.traffic_limit %}
+                            {{ _('guest_traffic_used') }}: {{ '%.2f'|format((settings.guest.traffic_used or 0) / (1024**3)) }} {{ _('gb') }}
+                            {% endif %}
+                        </div>
+                    </div>
+
+                    <div class="form-group">
                         <label class="form-label">{{ _('guest_password_label') }}</label>
                         <input type="password" class="form-input" id="guest_password"
                             placeholder="{% if settings.guest.password_hash %}{{ _('guest_password_keep') }}{% else %}{{ _('share_password_hint') }}{% endif %}"
@@ -1527,6 +1539,7 @@
             create_inbound_id: parseInt(document.getElementById('guest_create_inbound_id').value || '0'),
             create_xui_panel_id: document.getElementById('guest_create_xui_panel')?.value || '',
             create_allow_server_choice: !!(document.getElementById('guest_allow_server_choice') && document.getElementById('guest_allow_server_choice').checked),
+            traffic_limit: parseFloat(document.getElementById('guest_traffic_limit').value || '0') || 0,
         };
 
         const donateMethod = (key) => ({

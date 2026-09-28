@@ -2506,6 +2506,7 @@ class GuestSettings(BaseModel):
     create_inbound_id: int = 0
     create_xui_panel_id: str = ''
     create_allow_server_choice: bool = True
+    traffic_limit: Optional[float] = 0
 
 
 class DonateMethodSettings(BaseModel):
@@ -2868,6 +2869,7 @@ async def periodic_background_tasks():
                 await asyncio.sleep(0.2)
 
             to_disable_uids = []
+            guest_quota_uid = ''
             if updates:
                 async with DATA_LOCK:
                     curr_data = load_data()
@@ -2914,6 +2916,13 @@ async def periodic_background_tasks():
                                 if limit > 0 and u['traffic_used'] >= limit and u.get('enabled', True):
                                     if uid not in to_disable_uids:
                                         to_disable_uids.append(uid)
+
+                                guest_cfg = curr_data.setdefault('settings', {}).setdefault('guest', {})
+                                if guest_cfg.get('user_id') and guest_cfg.get('user_id') == uid:
+                                    guest_cfg['traffic_used'] = max(0, int(guest_cfg.get('traffic_used') or 0) + int(delta))
+                                    guest_limit = int(guest_cfg.get('traffic_limit') or 0)
+                                    if guest_limit > 0 and guest_cfg['traffic_used'] >= guest_limit:
+                                        guest_quota_uid = uid
                                 
                                 # Check expiration date (naive/aware-safe)
                                 if u.get('enabled', True):
@@ -2933,6 +2942,9 @@ async def periodic_background_tasks():
             if to_disable_uids:
                 logger.info(f"Traffic limit reached, disabling users: {to_disable_uids}")
                 await perform_mass_operations(toggle_uids=[(uid, False) for uid in to_disable_uids])
+            if guest_quota_uid:
+                logger.info("Guest link traffic limit reached for user %s", guest_quota_uid)
+                await _set_guest_quota_connections(guest_quota_uid, False)
 
             # --- 2. REMNAWAVE SYNC ---
             logger.info("Starting background Remnawave sync...")
@@ -5947,9 +5959,68 @@ def _guest_settings(data: Optional[dict] = None) -> dict:
         'create_inbound_id': 0,
         'create_xui_panel_id': '',
         'create_allow_server_choice': True,
+        'traffic_limit': 0,
+        'traffic_used': 0,
     }
     defaults.update(guest)
     return defaults
+
+
+def _guest_traffic_view(guest: dict) -> dict:
+    limit = int(guest.get('traffic_limit') or 0)
+    used = int(guest.get('traffic_used') or 0)
+    return {
+        'limit': limit,
+        'used': used,
+        'exhausted': limit > 0 and used >= limit,
+    }
+
+
+async def _set_guest_quota_connections(user_id: str, enabled: bool) -> None:
+    """Turn guest-user VPN peers off when the link quota is spent, or back on when it is raised."""
+    data = load_data()
+    if enabled:
+        targets = [c for c in data.get('user_connections', []) if c.get('user_id') == user_id and c.get('guest_limited')]
+    else:
+        targets = [c for c in data.get('user_connections', []) if c.get('user_id') == user_id and not c.get('guest_limited')]
+    for conn in targets:
+        try:
+            data = load_data()
+            if protocol_base(conn.get('protocol', '')) == 'xui':
+                from managers.xui_api import xui_toggle_client
+                await xui_toggle_client(
+                    data.get('settings', {}),
+                    conn['client_id'],
+                    enabled,
+                    panel_id=conn.get('xui_panel_id') or None,
+                )
+            else:
+                sid = int(conn.get('server_id') or 0)
+                servers = data.get('servers') or []
+                if sid < 0 or sid >= len(servers):
+                    continue
+                server = servers[sid]
+                ssh = get_ssh(server)
+                await asyncio.to_thread(ssh.connect)
+                try:
+                    manager = get_protocol_manager(ssh, conn['protocol'])
+                    await asyncio.to_thread(
+                        _manager_call, manager, 'toggle_client',
+                        conn['protocol'], conn['client_id'], enabled,
+                    )
+                finally:
+                    await asyncio.to_thread(ssh.disconnect)
+            async with DATA_LOCK:
+                data = load_data()
+                for row in data.get('user_connections', []):
+                    if row.get('id') == conn.get('id'):
+                        if enabled:
+                            row.pop('guest_limited', None)
+                        else:
+                            row['guest_limited'] = True
+                save_data(data)
+        except Exception:
+            logger.exception("Guest quota toggle failed for %s", conn.get('id'))
 
 
 def _resolve_guest(token: str, request: Request):
@@ -6035,13 +6106,13 @@ async def api_guest_connections(token: str, request: Request):
         'servers': servers,
     }
     if not holder:
-        return {'connections': [], **meta}
+        return {'connections': [], 'traffic': _guest_traffic_view(guest), **meta}
     conns = [
         _enrich_guest_conn(c, data)
         for c in data.get('user_connections', [])
         if c['user_id'] == holder['id']
     ]
-    return {'connections': conns, **meta}
+    return {'connections': conns, 'traffic': _guest_traffic_view(guest), **meta}
 
 
 @app.post('/api/guest/{token}/config/{connection_id}', tags=["Guest"])
@@ -6061,6 +6132,8 @@ async def api_guest_config(token: str, connection_id: str, request: Request):
         from managers.user_expiration import maybe_start_user_expiration, user_is_expired
         if user_is_expired(holder):
             return JSONResponse({'error': 'Subscription expired'}, status_code=403)
+        if _guest_traffic_view(guest)['exhausted']:
+            return JSONResponse({'error': _t('guest_traffic_exhausted', request.cookies.get('lang', 'ru'))}, status_code=403)
         if maybe_start_user_expiration(data, holder['id']):
             save_data(data)
         return await _fetch_connection_config_payload(data, conn, expires_at=holder.get('expiration_date'))
@@ -6090,6 +6163,8 @@ async def api_guest_create(token: str, req: GuestCreateRequest, request: Request
         from managers.user_expiration import maybe_start_user_expiration, user_is_expired
         if user_is_expired(holder):
             return JSONResponse({'error': 'Subscription expired'}, status_code=403)
+        if _guest_traffic_view(guest)['exhausted']:
+            return JSONResponse({'error': _t('guest_traffic_exhausted', request.cookies.get('lang', 'ru'))}, status_code=403)
 
         if protocol_base(protocol) == 'xui':
             sid = 0
@@ -7573,10 +7648,21 @@ async def save_settings(request: Request, payload: SaveSettingsRequest):
         guest['password_hash'] = hash_password(password)
     else:
         guest['password_hash'] = existing_guest.get('password_hash')
+    limit_gb = float(guest.get('traffic_limit') or 0)
+    if limit_gb < 0:
+        limit_gb = 0
+    guest['traffic_limit'] = int(limit_gb * (1024 ** 3))
+    guest['traffic_used'] = int(existing_guest.get('traffic_used') or 0)
     data['settings']['guest'] = guest
+    guest_uid = guest.get('user_id') or ''
+    guest_traffic = _guest_traffic_view(guest)
     data['settings']['donate'] = payload.donate.dict()
 
     save_data(data)
+    if guest_uid and guest_traffic['exhausted']:
+        await _set_guest_quota_connections(guest_uid, False)
+    elif guest_uid and not guest_traffic['exhausted']:
+        await _set_guest_quota_connections(guest_uid, True)
     logger.info("Settings saved (including captcha and telegram)")
 
     # Handle bot start/stop based on new telegram settings

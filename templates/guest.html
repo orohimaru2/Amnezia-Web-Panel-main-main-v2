@@ -10,6 +10,8 @@
         <p class="share-user">{{ _('guest_subtitle') }}</p>
         {% if not need_password %}
         <p class="share-hint">{{ _('share_copy_hint') }}</p>
+        <p id="guestTrafficNote" class="invite-status-note hidden"></p>
+        <p id="guestTrafficBanner" class="invite-status-banner is-danger hidden"></p>
         {% endif %}
     </header>
 
@@ -198,6 +200,27 @@
                 wrap.style.display = '';
             } else if (wrap) {
                 wrap.style.display = 'none';
+            }
+
+            const traffic = data.traffic || {};
+            const note = document.getElementById('guestTrafficNote');
+            const banner = document.getElementById('guestTrafficBanner');
+            const createWrap = document.querySelector('.share-create');
+            if (traffic.limit > 0) {
+                const used = (traffic.used / (1024 ** 3)).toFixed(2);
+                const limit = (traffic.limit / (1024 ** 3)).toFixed(2);
+                if (traffic.exhausted) {
+                    if (banner) {
+                        banner.textContent = _('guest_traffic_exhausted');
+                        banner.classList.remove('hidden');
+                    }
+                    if (note) note.classList.add('hidden');
+                    if (createWrap) createWrap.style.display = 'none';
+                } else if (note) {
+                    note.textContent = _('guest_traffic_status').replace('{used}', used).replace('{limit}', limit);
+                    note.classList.remove('hidden');
+                    if (banner) banner.classList.add('hidden');
+                }
             }
 
             if (!data.connections || data.connections.length === 0) {
