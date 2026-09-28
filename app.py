@@ -2592,6 +2592,7 @@ class IssueGuestLinkRequest(BaseModel):
     allow_server_choice: bool = False
     external_ref: str = ''
     reuse_only: bool = False
+    use_panel_servers: bool = False
 
 
 class InviteServerOption(BaseModel):
@@ -6465,6 +6466,11 @@ async def api_issue_guest_link(request: Request, req: IssueGuestLinkRequest):
                 'protocol': existing.get('create_protocol') or protocol,
             }
         allowed_ids = _evilfox_allowed_ids(data)
+        if req.use_panel_servers and not allowed_ids:
+            return JSONResponse(
+                {'error': 'В настройках панели не отмечены серверы для ссылок evilfox.win'},
+                status_code=400,
+            )
         if allowed_ids and server_id not in allowed_ids:
             server_id = allowed_ids[0]
         if protocol_base(protocol) != 'xui':
