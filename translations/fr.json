@@ -234,6 +234,8 @@
     "guest_protected_desc":  "Page protégée par mot de passe.",
     "guest_get_config":  "Obtenir la config",
     "guest_get_config_hint":  "Une nouvelle config VPN sera créée",
+    "guest_replace_config_hint":  "Une seule connexion reste active. Une nouvelle config remplace la précédente.",
+    "guest_new_config":  "Nouvelle config",
     "guest_not_found":  "404 Introuvable",
     "guest_not_found_desc":  "Accès invité désactivé ou lien invalide.",
     "wrong_guest_password":  "Mauvais mot de passe",

@@ -245,6 +245,8 @@
     "guest_protected_desc":  "Эта страница защищена паролем.",
     "guest_get_config":  "Получить конфиг",
     "guest_get_config_hint":  "Для вас будет создан новый VPN-конфиг",
+    "guest_replace_config_hint":  "Активно только одно подключение. Новый конфиг заменит предыдущий.",
+    "guest_new_config":  "Новый конфиг",
     "guest_not_found":  "404 Не найдено",
     "guest_not_found_desc":  "Гостевой доступ отключён или ссылка неверна.",
     "wrong_guest_password":  "Неверный пароль",

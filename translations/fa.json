@@ -234,6 +234,8 @@
     "guest_protected_desc":  "این صفحه با رمز عبور محافظت شده است.",
     "guest_get_config":  "دریافت کانفیگ",
     "guest_get_config_hint":  "یک کانفیگ VPN جدید برای شما ساخته می‌شود",
+    "guest_replace_config_hint":  "فقط یک اتصال فعال می‌ماند. کانفیگ جدید جایگزین قبلی می‌شود.",
+    "guest_new_config":  "کانفیگ جدید",
     "guest_not_found":  "404 یافت نشد",
     "guest_not_found_desc":  "دسترسی مهمان غیرفعال است یا لینک نامعتبر است.",
     "wrong_guest_password":  "رمز عبور اشتباه است",

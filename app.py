@@ -2594,7 +2594,7 @@ class IssueGuestLinkRequest(BaseModel):
     name: str = ''
     protocol: str = 'awg'
     server_id: int = 0
-    traffic_limit_gb: float = 0
+    traffic_limit_gb: float = 0  # 0 = evilfox base quota (1000 GB)
     allow_server_choice: bool = False
     external_ref: str = ''
     reuse_only: bool = False
@@ -2966,11 +2966,18 @@ async def periodic_background_tasks():
             logger.info("Starting background traffic sync...")
             reenable_conns = []
             xui_reset_conns = []
+            evilfox_over = []
             async with DATA_LOCK:
                 reset_data = load_data()
                 changed, reenable_conns, xui_reset_conns = _apply_invite_monthly_reset(reset_data, datetime.now())
-                if changed:
+                filled, evilfox_over = _fill_evilfox_base_quotas(reset_data)
+                if changed or filled:
                     save_data(reset_data)
+            for uid in evilfox_over:
+                try:
+                    await _block_guest_for_traffic(uid)
+                except Exception:
+                    logger.exception('Evilfox base quota block failed for %s', uid)
             for conn in xui_reset_conns:
                 try:
                     from managers.xui_api import xui_reset_client_traffic
@@ -6132,6 +6139,75 @@ def _guest_settings(data: Optional[dict] = None) -> dict:
     return defaults
 
 
+EVILFOX_BASE_TRAFFIC_GB = 1000
+
+
+def _evilfox_base_traffic_bytes() -> int:
+    return int(EVILFOX_BASE_TRAFFIC_GB * (1024 ** 3))
+
+
+def _evilfox_limit_bytes(requested_gb: float, stored_bytes: int = 0) -> int:
+    """Positive request wins. Zero keeps a saved quota, otherwise the 1000 GB base."""
+    gb = float(requested_gb or 0)
+    if gb > 0:
+        return int(gb * (1024 ** 3))
+    stored = int(stored_bytes or 0)
+    if stored > 0:
+        return stored
+    return _evilfox_base_traffic_bytes()
+
+
+def _fill_evilfox_base_quotas(data: dict) -> tuple:
+    """Set the 1000 GB base on issued links that have no quota.
+
+    Returns (changed, user ids already at or over that cap).
+    """
+    base = _evilfox_base_traffic_bytes()
+    changed = False
+    over: List[str] = []
+    for link in ((data.get('settings') or {}).get('guest_links') or []):
+        if not isinstance(link, dict) or int(link.get('traffic_limit') or 0) > 0:
+            continue
+        link['traffic_limit'] = base
+        changed = True
+        uid = link.get('user_id') or ''
+        for user in data.get('users') or []:
+            if user.get('id') == uid and int(user.get('traffic_limit') or 0) <= 0:
+                user['traffic_limit'] = base
+        if uid and int(link.get('traffic_used') or 0) >= base and uid not in over:
+            over.append(uid)
+    return changed, over
+
+
+def _ensure_issued_base_traffic(data: dict, token: str) -> bool:
+    """Fill a missing evilfox quota so an issued link is never unlimited."""
+    base = _evilfox_base_traffic_bytes()
+    changed = False
+    for link in ((data.get('settings') or {}).get('guest_links') or []):
+        if not isinstance(link, dict) or link.get('token') != token:
+            continue
+        if int(link.get('traffic_limit') or 0) > 0:
+            return False
+        link['traffic_limit'] = base
+        changed = True
+        uid = link.get('user_id') or ''
+        for user in data.get('users') or []:
+            if user.get('id') == uid and int(user.get('traffic_limit') or 0) <= 0:
+                user['traffic_limit'] = base
+        return changed
+    return False
+
+
+async def _apply_issued_base_traffic(token: str, guest: dict) -> dict:
+    if not guest.get('issued') or int(guest.get('traffic_limit') or 0) > 0:
+        return guest
+    async with DATA_LOCK:
+        data = load_data()
+        if _ensure_issued_base_traffic(data, token):
+            save_data(data)
+        return _guest_by_token(data, token) or guest
+
+
 def _guest_traffic_view(guest: dict) -> dict:
     limit = int(guest.get('traffic_limit') or 0)
     used = int(guest.get('traffic_used') or 0)
@@ -6540,6 +6616,7 @@ async def guest_page(token: str, request: Request):
         allow_create=bool(guest.get('allow_create')) and not traffic_blocked,
         create_protocol=guest.get('create_protocol') or 'xui',
         traffic_blocked=traffic_blocked,
+        replace_on_create=bool(guest.get('issued')),
     )
 
 
@@ -6569,6 +6646,7 @@ async def api_guest_connections(token: str, request: Request):
     data, guest, holder, err = _resolve_guest(token, request)
     if err:
         return err
+    guest = await _apply_issued_base_traffic(token, guest)
     protocol = guest.get('create_protocol') or 'xui'
     show_servers = bool(guest.get('issued')) or bool(guest.get('allowed_server_ids')) or bool(guest.get('create_allow_server_choice', True))
     if guest.get('allow_create') and protocol_base(protocol) != 'xui' and show_servers:
@@ -6587,6 +6665,7 @@ async def api_guest_connections(token: str, request: Request):
         'allow_server_choice': len(servers) >= 1,
         'default_server_id': default_server_id,
         'servers': servers,
+        'single_active': bool(guest.get('issued')),
     }
     if not holder:
         return {'connections': [], 'traffic': _guest_traffic_view(guest), **meta}
@@ -6635,6 +6714,8 @@ async def api_guest_create(token: str, req: GuestCreateRequest, request: Request
         return JSONResponse({'error': 'Guest config creation is disabled'}, status_code=403)
     if not holder:
         return JSONResponse({'error': 'Guest user is not configured in settings'}, status_code=400)
+    if guest.get('issued'):
+        guest = await _apply_issued_base_traffic(token, guest)
 
     requested = (req.protocol or guest.get('create_protocol') or 'xui').strip() or 'xui'
     name = (req.name or 'Guest VPN').strip() or 'Guest VPN'
@@ -6732,11 +6813,28 @@ async def api_guest_create(token: str, req: GuestCreateRequest, request: Request
         }
         if result.get('xui_panel_id'):
             conn['xui_panel_id'] = result['xui_panel_id']
+        retired = []
         async with DATA_LOCK:
             data = load_data()
+            if guest.get('issued'):
+                retired = [
+                    c for c in data.get('user_connections', [])
+                    if c.get('user_id') == holder['id'] and c.get('id') != conn['id']
+                ]
+                if retired:
+                    drop = {c.get('id') for c in retired}
+                    data['user_connections'] = [
+                        c for c in data.get('user_connections', [])
+                        if c.get('id') not in drop
+                    ]
             data['user_connections'].append(conn)
             maybe_start_user_expiration(data, holder['id'])
             save_data(data)
+        for old in retired:
+            try:
+                await _delete_remote_client(data, old)
+            except Exception:
+                logger.exception("Failed to remove previous evilfox config %s", old.get('id'))
 
         config = result.get('config') or ''
         subscription_url = result.get('subscription_url') or ''
@@ -6805,7 +6903,6 @@ async def api_issue_guest_link(request: Request, req: IssueGuestLinkRequest):
     limit_gb = float(req.traffic_limit_gb or 0)
     if limit_gb < 0:
         limit_gb = 0
-    limit_bytes = int(limit_gb * (1024 ** 3))
     server_id = int(req.server_id or 0)
     expires_iso = _guest_expires_iso(req.expires_at)
 
@@ -6825,8 +6922,13 @@ async def api_issue_guest_link(request: Request, req: IssueGuestLinkRequest):
             user_id = existing.get('user_id') or ''
             if not token:
                 return JSONResponse({'error': 'Guest link not found'}, status_code=404)
+            traffic_changed = int(existing.get('traffic_limit') or 0) <= 0
+            if traffic_changed:
+                existing['traffic_limit'] = _evilfox_base_traffic_bytes()
+                _set_guest_user_traffic_limit(data, user_id, int(existing['traffic_limit']))
             if expires_iso and user_id:
                 _set_guest_user_expiration(data, user_id, expires_iso)
+            if traffic_changed or (expires_iso and user_id):
                 save_data(data)
             url = _guest_public_url(request, token)
             return {
@@ -6858,10 +6960,11 @@ async def api_issue_guest_link(request: Request, req: IssueGuestLinkRequest):
             if server_id < 0 or server_id >= len(data.get('servers') or []):
                 return JSONResponse({'error': 'Server not found'}, status_code=400)
         choice_on = len(allowed_ids) >= 1
+        limit_bytes = _evilfox_limit_bytes(limit_gb, int((existing or {}).get('traffic_limit') or 0))
         if existing:
             user_id = existing.get('user_id') or ''
             if not user_id or not any(u.get('id') == user_id for u in data.get('users', [])):
-                user_id = _create_guest_link_user(data, name, external_ref, expires_iso)
+                user_id = _create_guest_link_user(data, name, external_ref, expires_iso, limit_bytes)
                 existing['user_id'] = user_id
             existing['name'] = name
             existing['create_protocol'] = protocol
@@ -6870,6 +6973,7 @@ async def api_issue_guest_link(request: Request, req: IssueGuestLinkRequest):
             existing['create_allow_server_choice'] = choice_on
             existing['allow_create'] = True
             existing['traffic_limit'] = limit_bytes
+            _set_guest_user_traffic_limit(data, user_id, limit_bytes, only_if_empty=False)
             if _guest_traffic_view(existing)['exhausted']:
                 existing['enabled'] = False
                 existing['disabled_by_traffic'] = True
@@ -6883,7 +6987,7 @@ async def api_issue_guest_link(request: Request, req: IssueGuestLinkRequest):
                 _set_guest_user_expiration(data, user_id, expires_iso)
             save_data(data)
         else:
-            user_id = _create_guest_link_user(data, name, external_ref, expires_iso)
+            user_id = _create_guest_link_user(data, name, external_ref, expires_iso, limit_bytes)
             token = secrets.token_urlsafe(16)
             links.append({
                 'id': str(uuid.uuid4()),
@@ -6916,7 +7020,19 @@ async def api_issue_guest_link(request: Request, req: IssueGuestLinkRequest):
     }
 
 
-def _create_guest_link_user(data: dict, name: str, external_ref: str, expires_iso: Optional[str] = None) -> str:
+def _set_guest_user_traffic_limit(data: dict, user_id: str, limit_bytes: int, only_if_empty: bool = True) -> None:
+    if not user_id or int(limit_bytes or 0) <= 0:
+        return
+    for user in data.get('users') or []:
+        if user.get('id') != user_id:
+            continue
+        if only_if_empty and int(user.get('traffic_limit') or 0) > 0:
+            return
+        user['traffic_limit'] = int(limit_bytes)
+        return
+
+
+def _create_guest_link_user(data: dict, name: str, external_ref: str, expires_iso: Optional[str] = None, traffic_limit: int = 0) -> str:
     taken = {u.get('username') for u in data.get('users', [])}
     username = 'gst_' + secrets.token_hex(4)
     while username in taken:
@@ -6930,7 +7046,7 @@ def _create_guest_link_user(data: dict, name: str, external_ref: str, expires_is
         'telegramId': None,
         'email': None,
         'description': (external_ref or name or 'Guest link')[:200],
-        'traffic_limit': 0,
+        'traffic_limit': int(traffic_limit or 0),
         'traffic_reset_strategy': 'never',
         'traffic_used': 0,
         'traffic_total': 0,

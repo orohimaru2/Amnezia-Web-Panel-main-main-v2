@@ -59,7 +59,7 @@
                 <span id="createBtnText">{{ _('guest_get_config') }}</span>
                 <div class="spinner hidden" id="createSpinner"></div>
             </button>
-            <p class="share-create-hint">{{ _('guest_get_config_hint') }}</p>
+            <p class="share-create-hint" id="createHint">{{ _('guest_replace_config_hint') if replace_on_create else _('guest_get_config_hint') }}</p>
         </div>
         {% endif %}
 
@@ -225,6 +225,17 @@
             const note = document.getElementById('guestTrafficNote');
             const banner = document.getElementById('guestTrafficBanner');
             const createWrap = document.querySelector('.share-create');
+            if (data.single_active) {
+                const hint = document.getElementById('createHint');
+                if (hint) hint.textContent = _('guest_replace_config_hint');
+                const btnText = document.getElementById('createBtnText');
+                if (btnText) {
+                    btnText.textContent = (data.connections && data.connections.length)
+                        ? _('guest_new_config')
+                        : _('guest_get_config');
+                }
+            }
+
             if (traffic.limit > 0) {
                 const used = (traffic.used / (1024 ** 3)).toFixed(2);
                 const limit = (traffic.limit / (1024 ** 3)).toFixed(2);
