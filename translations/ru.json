@@ -246,6 +246,8 @@
     "guest_get_config":  "Получить конфиг",
     "guest_get_config_hint":  "Для вас будет создан новый VPN-конфиг",
     "guest_replace_config_hint":  "Активно только одно подключение. Новый конфиг заменит предыдущий.",
+    "guest_config_limit_hint":  "Можно создать только 1 конфиг.",
+    "guest_config_limit_reached":  "Лимит: 1 конфиг. Новый удалит текущий и создастся заново.",
     "guest_new_config":  "Новый конфиг",
     "guest_not_found":  "404 Не найдено",
     "guest_not_found_desc":  "Гостевой доступ отключён или ссылка неверна.",

@@ -246,6 +246,8 @@
     "guest_get_config":  "Get config",
     "guest_get_config_hint":  "A new VPN config will be created for you",
     "guest_replace_config_hint":  "Only one connection stays active. A new config replaces the previous one.",
+    "guest_config_limit_hint":  "You can create only 1 config.",
+    "guest_config_limit_reached":  "Limit: 1 config. A new one deletes the current config and is created instead.",
     "guest_new_config":  "New config",
     "guest_not_found":  "404 Not Found",
     "guest_not_found_desc":  "Guest access is disabled or the link is invalid.",

@@ -2584,6 +2584,7 @@ class GuestCreateRequest(BaseModel):
     name: str = 'Guest VPN'
     server_id: Optional[int] = None
     protocol: Optional[str] = None
+    replace: bool = False
 
 
 class DeleteGuestLinkRequest(BaseModel):
@@ -5817,6 +5818,9 @@ async def api_add_user_connection(request: Request, user_id: str, req: AddUserCo
         user = next((u for u in data['users'] if u['id'] == user_id), None)
         if not user:
             return JSONResponse({'error': 'User not found'}, status_code=404)
+        if _is_evilfox_user(data, user_id) and _holder_connections(data, user_id):
+            await _drop_holder_connections(user_id)
+            data = load_data()
         protocol = req.protocol
         if protocol_base(protocol) == 'aivpn':
             from managers.aivpn_manager import resolve_provision_protocol
@@ -5871,7 +5875,7 @@ async def api_add_user_connection(request: Request, user_id: str, req: AddUserCo
                 }
                 async with DATA_LOCK:
                     data = load_data()
-                    data['user_connections'].append(conn)
+                    _append_single_evilfox_connection(data, user_id, conn)
                     save_data(data)
             resp = {'status': 'success'}
             if result.get('config'):
@@ -5932,7 +5936,7 @@ async def api_add_user_connection(request: Request, user_id: str, req: AddUserCo
             }
             async with DATA_LOCK:
                 data = load_data()
-                data['user_connections'].append(conn)
+                _append_single_evilfox_connection(data, user_id, conn)
                 save_data(data)
 
         resp = {'status': 'success'}
@@ -6140,6 +6144,68 @@ def _guest_settings(data: Optional[dict] = None) -> dict:
 
 
 EVILFOX_BASE_TRAFFIC_GB = 1000
+EVILFOX_CONFIG_LIMIT = 1
+_EVILFOX_CREATE_LOCKS: Dict[str, asyncio.Lock] = {}
+
+
+def _evilfox_create_lock(user_id: str) -> asyncio.Lock:
+    lock = _EVILFOX_CREATE_LOCKS.get(user_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _EVILFOX_CREATE_LOCKS[user_id] = lock
+    return lock
+
+
+def _is_evilfox_user(data: dict, user_id: str) -> bool:
+    if not user_id:
+        return False
+    for link in ((data.get('settings') or {}).get('guest_links') or []):
+        if isinstance(link, dict) and (link.get('user_id') or '') == user_id:
+            return True
+    for user in data.get('users') or []:
+        if user.get('id') == user_id and str(user.get('description') or '').startswith('evilfox-sub-'):
+            return True
+    return False
+
+
+def _holder_connections(data: dict, user_id: str) -> list:
+    return [c for c in data.get('user_connections', []) if c.get('user_id') == user_id]
+
+
+async def _drop_holder_connections(user_id: str) -> None:
+    """Remove every VPN config of an evilfox user so only a new one can be created."""
+    async with DATA_LOCK:
+        data = load_data()
+        old = _holder_connections(data, user_id)
+        if not old:
+            return
+        drop = {c.get('id') for c in old}
+        data['user_connections'] = [
+            c for c in data.get('user_connections', [])
+            if c.get('id') not in drop
+        ]
+        save_data(data)
+    fresh = load_data()
+    for conn in old:
+        try:
+            await _delete_remote_client(fresh, conn)
+        except Exception:
+            logger.exception("Failed to remove evilfox config %s", conn.get('id'))
+
+
+def _append_single_evilfox_connection(data: dict, user_id: str, conn: dict) -> None:
+    """Evilfox users keep one config. A new one replaces whatever is already stored."""
+    if _is_evilfox_user(data, user_id):
+        data['user_connections'] = [
+            c for c in data.get('user_connections', [])
+            if c.get('user_id') != user_id
+        ]
+        base = _evilfox_base_traffic_bytes()
+        for link in ((data.get('settings') or {}).get('guest_links') or []):
+            if isinstance(link, dict) and (link.get('user_id') or '') == user_id and int(link.get('traffic_limit') or 0) <= 0:
+                link['traffic_limit'] = base
+        _set_guest_user_traffic_limit(data, user_id, base, only_if_empty=True)
+    data.setdefault('user_connections', []).append(conn)
 
 
 def _evilfox_base_traffic_bytes() -> int:
@@ -6656,7 +6722,16 @@ async def api_guest_connections(token: str, request: Request):
     default_server_id = int(guest.get('create_server_id') or 0)
     if servers and all(int(s.get('id')) != default_server_id for s in servers):
         default_server_id = int(servers[0]['id'])
-    meta = {
+    conns = []
+    if holder:
+        conns = [
+            _enrich_guest_conn(c, data)
+            for c in data.get('user_connections', [])
+            if c['user_id'] == holder['id']
+        ]
+    return {
+        'connections': conns,
+        'traffic': _guest_traffic_view(guest),
         'allow_create': bool(guest.get('allow_create')),
         'create_protocol': protocol,
         'allow_protocol_choice': len(protocols) >= 1,
@@ -6666,15 +6741,9 @@ async def api_guest_connections(token: str, request: Request):
         'default_server_id': default_server_id,
         'servers': servers,
         'single_active': bool(guest.get('issued')),
+        'config_limit': EVILFOX_CONFIG_LIMIT if guest.get('issued') else 0,
+        'config_count': len(conns),
     }
-    if not holder:
-        return {'connections': [], 'traffic': _guest_traffic_view(guest), **meta}
-    conns = [
-        _enrich_guest_conn(c, data)
-        for c in data.get('user_connections', [])
-        if c['user_id'] == holder['id']
-    ]
-    return {'connections': conns, 'traffic': _guest_traffic_view(guest), **meta}
 
 
 @app.post('/api/guest/{token}/config/{connection_id}', tags=["Guest"])
@@ -6731,12 +6800,23 @@ async def api_guest_create(token: str, req: GuestCreateRequest, request: Request
     if choice_servers and int(guest.get('create_server_id') or 0) not in {int(s['id']) for s in choice_servers}:
         guest['create_server_id'] = int(choice_servers[0]['id'])
 
+    evilfox_lock = _evilfox_create_lock(holder['id']) if guest.get('issued') else None
+    if evilfox_lock:
+        await evilfox_lock.acquire()
     try:
         from managers.user_expiration import maybe_start_user_expiration, user_is_expired
         if user_is_expired(holder):
             return JSONResponse({'error': 'Subscription expired'}, status_code=403)
         if _guest_traffic_view(guest)['exhausted']:
             return JSONResponse({'error': _t('guest_traffic_exhausted', request.cookies.get('lang', 'ru'))}, status_code=403)
+        if guest.get('issued'):
+            fresh = load_data()
+            already = _holder_connections(fresh, holder['id'])
+            if len(already) >= EVILFOX_CONFIG_LIMIT and not req.replace:
+                lang = request.cookies.get('lang', 'ru')
+                return JSONResponse({'error': _t('guest_config_limit_reached', lang)}, status_code=409)
+            if already:
+                await _drop_holder_connections(holder['id'])
 
         if protocol_base(protocol) == 'xui':
             sid = 0
@@ -6813,28 +6893,17 @@ async def api_guest_create(token: str, req: GuestCreateRequest, request: Request
         }
         if result.get('xui_panel_id'):
             conn['xui_panel_id'] = result['xui_panel_id']
-        retired = []
         async with DATA_LOCK:
             data = load_data()
             if guest.get('issued'):
-                retired = [
+                data['user_connections'] = [
                     c for c in data.get('user_connections', [])
-                    if c.get('user_id') == holder['id'] and c.get('id') != conn['id']
+                    if c.get('user_id') != holder['id']
                 ]
-                if retired:
-                    drop = {c.get('id') for c in retired}
-                    data['user_connections'] = [
-                        c for c in data.get('user_connections', [])
-                        if c.get('id') not in drop
-                    ]
+                _ensure_issued_base_traffic(data, token)
             data['user_connections'].append(conn)
             maybe_start_user_expiration(data, holder['id'])
             save_data(data)
-        for old in retired:
-            try:
-                await _delete_remote_client(data, old)
-            except Exception:
-                logger.exception("Failed to remove previous evilfox config %s", old.get('id'))
 
         config = result.get('config') or ''
         subscription_url = result.get('subscription_url') or ''
@@ -6850,6 +6919,9 @@ async def api_guest_create(token: str, req: GuestCreateRequest, request: Request
     except Exception as e:
         logger.exception("Error creating guest config")
         return JSONResponse({'error': str(e)}, status_code=500)
+    finally:
+        if evilfox_lock and evilfox_lock.locked():
+            evilfox_lock.release()
 
 
 @app.post('/api/settings/guest/regenerate_token', tags=["Settings"])

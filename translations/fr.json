@@ -235,6 +235,8 @@
     "guest_get_config":  "Obtenir la config",
     "guest_get_config_hint":  "Une nouvelle config VPN sera créée",
     "guest_replace_config_hint":  "Une seule connexion reste active. Une nouvelle config remplace la précédente.",
+    "guest_config_limit_hint":  "Vous ne pouvez créer qu'une seule config.",
+    "guest_config_limit_reached":  "Limite : 1 config. Une nouvelle supprime la config actuelle.",
     "guest_new_config":  "Nouvelle config",
     "guest_not_found":  "404 Introuvable",
     "guest_not_found_desc":  "Accès invité désactivé ou lien invalide.",

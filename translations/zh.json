@@ -235,6 +235,8 @@
     "guest_get_config":  "获取配置",
     "guest_get_config_hint":  "将为您创建新的 VPN 配置",
     "guest_replace_config_hint":  "同时只能有一个有效连接。新配置会替换上一个。",
+    "guest_config_limit_hint":  "只能创建一个配置。",
+    "guest_config_limit_reached":  "限制：1 个配置。新配置会删除当前配置并重新创建。",
     "guest_new_config":  "新配置",
     "guest_not_found":  "404 未找到",
     "guest_not_found_desc":  "访客访问已禁用或链接无效。",

@@ -235,6 +235,8 @@
     "guest_get_config":  "دریافت کانفیگ",
     "guest_get_config_hint":  "یک کانفیگ VPN جدید برای شما ساخته می‌شود",
     "guest_replace_config_hint":  "فقط یک اتصال فعال می‌ماند. کانفیگ جدید جایگزین قبلی می‌شود.",
+    "guest_config_limit_hint":  "فقط ۱ کانفیگ می‌توان ساخت.",
+    "guest_config_limit_reached":  "محدودیت: ۱ کانفیگ. کانفیگ جدید، کانفیگ فعلی را حذف می‌کند.",
     "guest_new_config":  "کانفیگ جدید",
     "guest_not_found":  "404 یافت نشد",
     "guest_not_found_desc":  "دسترسی مهمان غیرفعال است یا لینک نامعتبر است.",

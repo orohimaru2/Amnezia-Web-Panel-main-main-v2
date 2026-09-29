@@ -59,7 +59,7 @@
                 <span id="createBtnText">{{ _('guest_get_config') }}</span>
                 <div class="spinner hidden" id="createSpinner"></div>
             </button>
-            <p class="share-create-hint" id="createHint">{{ _('guest_replace_config_hint') if replace_on_create else _('guest_get_config_hint') }}</p>
+            <p class="share-create-hint" id="createHint">{{ _('guest_config_limit_hint') if replace_on_create else _('guest_get_config_hint') }}</p>
         </div>
         {% endif %}
 
@@ -112,6 +112,7 @@
     let currentConfig = '';
     let currentVpnLink = '';
     let currentName = '';
+    let guestReplaceNext = false;
 
     function escAttr(s) {
         return String(s || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
@@ -225,14 +226,17 @@
             const note = document.getElementById('guestTrafficNote');
             const banner = document.getElementById('guestTrafficBanner');
             const createWrap = document.querySelector('.share-create');
+            guestReplaceNext = !!(data.single_active && data.config_limit && (data.config_count || (data.connections && data.connections.length)));
             if (data.single_active) {
                 const hint = document.getElementById('createHint');
-                if (hint) hint.textContent = _('guest_replace_config_hint');
+                if (hint) {
+                    hint.textContent = guestReplaceNext
+                        ? _('guest_config_limit_reached')
+                        : _('guest_config_limit_hint');
+                }
                 const btnText = document.getElementById('createBtnText');
                 if (btnText) {
-                    btnText.textContent = (data.connections && data.connections.length)
-                        ? _('guest_new_config')
-                        : _('guest_get_config');
+                    btnText.textContent = guestReplaceNext ? _('guest_new_config') : _('guest_get_config');
                 }
             }
 
@@ -446,7 +450,7 @@
         text.classList.add('hidden');
         spinner.classList.remove('hidden');
         try {
-            const body = { name: 'Guest VPN' };
+            const body = { name: 'Guest VPN', replace: guestReplaceNext };
             const protoSel = document.getElementById('guestProtocolPick');
             const protoWrap = document.getElementById('guestProtocolPickWrap');
             if (protoWrap && protoWrap.style.display !== 'none' && protoSel && protoSel.value) {
